@@ -1,0 +1,209 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content">
+
+    <!-- Compact minimized pill -->
+    <LinearLayout
+        android:id="@+id/miniPillContainer"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_pill_mini"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="7dp"
+        android:visibility="gone">
+
+        <TextView
+            android:id="@+id/miniPillText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:ellipsize="end"
+            android:maxLines="1"
+            android:maxWidth="240dp"
+            android:text="★ Жду ход..."
+            android:textColor="@color/text_primary"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <!-- Expanded floating advisor panel -->
+    <LinearLayout
+        android:id="@+id/expandedContainer"
+        android:layout_width="290dp"
+        android:layout_height="wrap_content"
+        android:background="@drawable/bg_card_panel"
+        android:orientation="vertical"
+        android:padding="10dp">
+
+        <!-- Drag header & toolbar -->
+        <LinearLayout
+            android:id="@+id/dragHeader"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingBottom="6dp">
+
+            <TextView
+                android:id="@+id/tvStatus"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:ellipsize="end"
+                android:maxLines="1"
+                android:text="🟢 Запуск..."
+                android:textColor="@color/text_primary"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvSeatBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:background="@drawable/bg_chip_normal"
+                android:paddingHorizontal="6dp"
+                android:paddingVertical="2dp"
+                android:text="Авто"
+                android:textColor="@color/text_primary"
+                android:textSize="10sp" />
+
+            <ImageButton
+                android:id="@+id/btnPause"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Пауза"
+                android:padding="4dp"
+                android:scaleType="centerInside"
+                android:src="@android:drawable/ic_media_pause"
+                android:tint="@color/text_primary" />
+
+            <ImageButton
+                android:id="@+id/btnRefresh"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Обновить"
+                android:padding="4dp"
+                android:scaleType="centerInside"
+                android:src="@android:drawable/ic_popup_sync"
+                android:tint="@color/accent_emerald" />
+
+            <ImageButton
+                android:id="@+id/btnMinimize"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Свернуть"
+                android:padding="4dp"
+                android:scaleType="centerInside"
+                android:src="@android:drawable/arrow_up_float"
+                android:tint="@color/text_secondary" />
+
+            <ImageButton
+                android:id="@+id/btnClose"
+                android:layout_width="26dp"
+                android:layout_height="26dp"
+                android:background="?android:attr/selectableItemBackgroundBorderless"
+                android:contentDescription="Закрыть"
+                android:padding="4dp"
+                android:scaleType="centerInside"
+                android:src="@android:drawable/ic_menu_close_clear_cancel"
+                android:tint="@color/accent_danger" />
+        </LinearLayout>
+
+        <!-- Warning strip -->
+        <TextView
+            android:id="@+id/tvWarning"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="6dp"
+            android:background="#33FF4458"
+            android:paddingHorizontal="8dp"
+            android:paddingVertical="4dp"
+            android:textColor="#FFD1D6"
+            android:textSize="10sp"
+            android:visibility="gone" />
+
+        <!-- Hero Best Move Card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="#26314F"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:padding="8dp">
+
+            <TextView
+                android:id="@+id/tvBestCard"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:background="@drawable/bg_chip_best"
+                android:gravity="center"
+                android:text="—"
+                android:textColor="#061B10"
+                android:textSize="18sp"
+                android:textStyle="bold" />
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/tvBestHeadline"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:text="Ожидание поля..."
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/tvBestSubtext"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:ellipsize="end"
+                    android:maxLines="2"
+                    android:text="Откройте «Карточный магнат»"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="10sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Multi-turn hand combo plan -->
+        <TextView
+            android:id="@+id/tvCombo"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="5dp"
+            android:textColor="@color/accent_emerald"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <!-- Ranked moves list (tap card chip to manually fix OCR digit) -->
+        <LinearLayout
+            android:id="@+id/movesListContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:orientation="vertical" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Тап по карте меняет цифру вручную · зажатие сбрасывает"
+            android:textColor="#6E7899"
+            android:textSize="9sp" />
+    </LinearLayout>
+</FrameLayout>

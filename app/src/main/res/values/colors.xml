@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_dark">#111420</color>
+    <color name="card_surface">#1B2033</color>
+    <color name="card_surface_elevated">#242B42</color>
+    <color name="accent_emerald">#00E676</color>
+    <color name="accent_emerald_dark">#00B85C</color>
+    <color name="accent_amber">#FFB300</color>
+    <color name="accent_danger">#FF4458</color>
+    <color name="accent_purple">#8B6BFF</color>
+    <color name="text_primary">#F5F7FF</color>
+    <color name="text_secondary">#A6B0CE</color>
+    <color name="divider_subtle">#2D3652</color>
+</resources>

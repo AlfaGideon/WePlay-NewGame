@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Карточный Советник</string>
+    <string name="app_subtitle">Помощник ходов для «Карточный магнат» (WePlay)</string>
+    <string name="title_settings">Веса и правила расчёта</string>
+    <string name="btn_start_widget">Запустить плавающий виджет</string>
+    <string name="btn_stop_widget">Остановить виджет</string>
+    <string name="btn_stop">Остановить</string>
+    <string name="notif_channel_name">Плавающий советник</string>
+    <string name="notif_running_text">Анализ экрана «Карточный магнат» активен</string>
+    <string name="toast_widget_started">Виджет запущен! Откройте WePlay «Карточный магнат»</string>
+    <string name="toast_capture_denied">Разрешение на захват экрана не выдано</string>
+    <string name="toast_need_overlay">Сначала разрешите показ поверх других окон</string>
+</resources>

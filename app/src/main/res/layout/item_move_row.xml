@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:gravity="center_vertical"
+    android:orientation="horizontal"
+    android:paddingVertical="3dp">
+
+    <TextView
+        android:id="@+id/tvRowCard"
+        android:layout_width="34dp"
+        android:layout_height="24dp"
+        android:background="@drawable/bg_chip_normal"
+        android:gravity="center"
+        android:text="+5"
+        android:textColor="@color/text_primary"
+        android:textSize="11sp"
+        android:textStyle="bold" />
+
+    <TextView
+        android:id="@+id/tvRowAction"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginHorizontal="6dp"
+        android:layout_weight="1"
+        android:ellipsize="end"
+        android:maxLines="1"
+        android:text="Кл.2: Купить за 200"
+        android:textColor="@color/text_primary"
+        android:textSize="11sp" />
+
+    <TextView
+        android:id="@+id/tvRowScore"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:minWidth="38dp"
+        android:gravity="end"
+        android:text="+420"
+        android:textColor="@color/text_secondary"
+        android:textSize="10sp"
+        android:textStyle="bold" />
+</LinearLayout>
