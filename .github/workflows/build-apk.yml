@@ -37,11 +37,37 @@ jobs:
           echo "name=${VN}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VN}" >> "$GITHUB_OUTPUT"
 
+      - name: Decode Private Permanent Signing Key (if configured in Secrets)
+        id: sign
+        env:
+          KEYSTORE_B64: ${{ secrets.OTA_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "Using private permanent signing key from GitHub Secrets"
+            printf '%s' "$KEYSTORE_B64" | tr -d '\n\r ' | base64 -d > "${RUNNER_TEMP}/permanent-ota.p12"
+            echo "keystore_path=${RUNNER_TEMP}/permanent-ota.p12" >> "$GITHUB_OUTPUT"
+            echo "label=Приватный постоянный ключ (GitHub Secrets)" >> "$GITHUB_OUTPUT"
+          else
+            echo "Secrets not set yet — using built-in universal-ota.p12 fallback"
+            echo "keystore_path=" >> "$GITHUB_OUTPUT"
+            echo "label=Универсальный встроенный ключ (fallback)" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run Unit Tests
         run: gradle testDebugUnitTest -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace
 
-      - name: Build Universal-OTA Signed Release APK
+      - name: Build Signed Release APK
+        env:
+          OTA_KEYSTORE_PATH: ${{ steps.sign.outputs.keystore_path }}
+          OTA_KEYSTORE_TYPE: PKCS12
+          OTA_KEYSTORE_PASS: ${{ secrets.OTA_KEYSTORE_PASS }}
+          OTA_KEY_ALIAS: ${{ secrets.OTA_KEY_ALIAS }}
+          OTA_KEY_PASS: ${{ secrets.OTA_KEY_PASS }}
         run: gradle assembleRelease -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace
+
+      - name: Verify APK Signing Certificate Fingerprint
+        run: |
+          keytool -printcert -jarfile app/build/outputs/apk/release/app-release.apk | grep -E "Owner:|SHA256:" || true
 
       - name: Prepare APK Output
         run: |
@@ -57,7 +83,7 @@ jobs:
           path: apk_out/CardTycoonHelper-v${{ steps.ver.outputs.name }}.apk
           retention-days: 30
 
-      - name: Publish GitHub Release for OTA Auto-Updates (no secrets needed)
+      - name: Publish GitHub Release for OTA Auto-Updates
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,9 +91,10 @@ jobs:
           TAG="${{ steps.ver.outputs.tag }}"
           APK="apk_out/CardTycoonHelper-v${{ steps.ver.outputs.name }}.apk"
           NOTES="versionCode: ${{ steps.ver.outputs.code }}
-          Версия ${{ steps.ver.outputs.name }} — универсальная подпись OTA.
+          Версия ${{ steps.ver.outputs.name }} · Подпись: ${{ steps.sign.outputs.label }}
           Изменения:
-          - Обновление по воздуху (OTA) прямо из приложения без секретных ключей
+          - Поддержка приватного постоянного ключа подписи через GitHub Secrets (OTA_KEYSTORE_BASE64)
+          - Обновление по воздуху (OTA) прямо из приложения
           - Точная привязка подсветки карт и клеток (исправлен сдвиг выреза/статус-бара)
           - Рекомендации фиксируются только на вашем ходу (без прыжков во время чужих ходов)
           - Улучшенный OCR карт (сплошная заливка + консенсус 2 кадров, только реальные карты в руке)

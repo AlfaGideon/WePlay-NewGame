@@ -27,12 +27,16 @@ android {
 
     signingConfigs {
         create("universalOta") {
-            val customPath = System.getenv("OTA_KEYSTORE_PATH")
-            storeFile = if (!customPath.isNullOrBlank()) file(customPath) else file("signing/universal-ota.p12")
-            storeType = System.getenv("OTA_KEYSTORE_TYPE") ?: "PKCS12"
-            storePassword = System.getenv("OTA_KEYSTORE_PASS") ?: "cardtycoon_ota_universal"
-            keyAlias = System.getenv("OTA_KEY_ALIAS") ?: "cardtycoon"
-            keyPassword = System.getenv("OTA_KEY_PASS") ?: "cardtycoon_ota_universal"
+            val customPath = System.getenv("OTA_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
+            val customPass = System.getenv("OTA_KEYSTORE_PASS")?.takeIf { it.isNotBlank() }
+            val customAlias = System.getenv("OTA_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+            val customKeyPass = System.getenv("OTA_KEY_PASS")?.takeIf { it.isNotBlank() }
+
+            storeFile = if (customPath != null) java.io.File(customPath) else file("signing/universal-ota.p12")
+            storeType = System.getenv("OTA_KEYSTORE_TYPE")?.takeIf { it.isNotBlank() } ?: "PKCS12"
+            storePassword = customPass ?: "cardtycoon_ota_universal"
+            keyAlias = customAlias ?: "cardtycoon"
+            keyPassword = customKeyPass ?: customPass ?: "cardtycoon_ota_universal"
         }
     }
 
