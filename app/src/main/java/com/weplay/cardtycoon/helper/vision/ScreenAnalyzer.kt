@@ -31,19 +31,21 @@ class ScreenAnalyzer {
 
     private data class NormRect(val x0: Float, val y0: Float, val x1: Float, val y1: Float)
 
+    private enum class ScreenSeat { TOP_LEFT, TOP_RIGHT, BOTTOM_LEFT, BOTTOM_RIGHT }
+
     companion object {
-        private val MONEY_PILLS = mapOf(
-            PlayerColor.ORANGE to NormRect(0.030f, 0.270f, 0.196f, 0.298f),
-            PlayerColor.GREEN to NormRect(0.804f, 0.270f, 0.970f, 0.298f),
-            PlayerColor.BLUE to NormRect(0.030f, 0.670f, 0.196f, 0.697f),
-            PlayerColor.RED to NormRect(0.804f, 0.670f, 0.970f, 0.697f)
+        private val SEAT_AVATAR_RINGS = mapOf(
+            ScreenSeat.TOP_LEFT to NormRect(0.020f, 0.170f, 0.220f, 0.260f),
+            ScreenSeat.TOP_RIGHT to NormRect(0.780f, 0.170f, 0.980f, 0.260f),
+            ScreenSeat.BOTTOM_LEFT to NormRect(0.020f, 0.560f, 0.220f, 0.660f),
+            ScreenSeat.BOTTOM_RIGHT to NormRect(0.780f, 0.560f, 0.980f, 0.660f)
         )
 
-        private val CARDBACK_ZONES = mapOf(
-            PlayerColor.ORANGE to NormRect(0.065f, 0.162f, 0.148f, 0.183f),
-            PlayerColor.GREEN to NormRect(0.852f, 0.162f, 0.935f, 0.183f),
-            PlayerColor.BLUE to NormRect(0.065f, 0.556f, 0.148f, 0.577f),
-            PlayerColor.RED to NormRect(0.852f, 0.556f, 0.935f, 0.577f)
+        private val SEAT_MONEY_PILLS = mapOf(
+            ScreenSeat.TOP_LEFT to NormRect(0.030f, 0.270f, 0.196f, 0.298f),
+            ScreenSeat.TOP_RIGHT to NormRect(0.804f, 0.270f, 0.970f, 0.298f),
+            ScreenSeat.BOTTOM_LEFT to NormRect(0.030f, 0.670f, 0.196f, 0.697f),
+            ScreenSeat.BOTTOM_RIGHT to NormRect(0.804f, 0.670f, 0.970f, 0.697f)
         )
 
         private val ROUND_BOX = NormRect(0.390f, 0.178f, 0.610f, 0.208f)
@@ -65,9 +67,15 @@ class ScreenAnalyzer {
             val cal = calibrator.calibrate(bitmap)
             val scale = cal.scale.coerceIn(0.45f, 2.2f)
 
+            // 1. Dynamically detect which PlayerColor sits at each of the 4 avatar seats!
+            // Local player is ALWAYS at BOTTOM_LEFT (right next to the Hammer ring), even if their color changes!
+            val seatToColor = detectSeatColors(bitmap)
+            val detectedLocalColor = seatToColor[ScreenSeat.BOTTOM_LEFT] ?: PlayerColor.BLUE
+
             val bankruptMap = HashMap<PlayerColor, Boolean>()
             val moneyMap = HashMap<PlayerColor, Int>()
-            for ((color, nr) in MONEY_PILLS) {
+            for ((seat, nr) in SEAT_MONEY_PILLS) {
+                val color = seatToColor[seat] ?: continue
                 val crop = safeCrop(bitmap, nr)
                 if (crop == null) {
                     bankruptMap[color] = false
@@ -94,7 +102,7 @@ class ScreenAnalyzer {
             val handCards = detectAndReadHandCards(bitmap)
             val isMyTurn = handCards.isNotEmpty() && handCards.count { it.isActive } >= ((handCards.size + 1) / 2)
 
-            val localColor = settings.preferredSeat ?: detectLocalPlayerSeat(bitmap, handCards.isNotEmpty())
+            val localColor = settings.preferredSeat ?: detectedLocalColor
 
             val pawns = detectPawns(bitmap, cal, scale, bankruptMap)
             val pawnByTile = HashMap<Int, PlayerColor>()
@@ -103,7 +111,7 @@ class ScreenAnalyzer {
             }
 
             val tiles = detectTiles(bitmap, cal, scale, pawnByTile, localColor)
-            val hammerProgress = detectHammerProgress(bitmap, localColor)
+            val hammerProgress = detectHammerProgress(bitmap)
 
             val players = PlayerColor.entries.associateWith { color ->
                 val isBk = bankruptMap[color] == true
@@ -230,10 +238,14 @@ class ScreenAnalyzer {
                     }
                 } else {
                     val roof = HsvUtils.countVividInRect(bitmap, cx - s(28f), cy - s(46f), cx + s(28f), cy - s(6f), step = 2)
+                    // Bomb can sit BOTH on empty tiles AND on top of an already-owned house (e.g. Tile 1)!
+                    val bombZone = HsvUtils.countVividInRect(bitmap, cx - s(32f), cy - s(46f), cx + s(36f), cy + s(18f), step = 2)
+                    if (bombZone.bombDark >= (450f * areaScale)) {
+                        hasBomb = true
+                    }
+
                     if (roof.mud >= (500f * areaScale) && roof.orange < (250f * areaScale)) {
                         hasMud = true
-                    } else if (roof.bombDark >= (380f * areaScale) && roof.maxPlayerColor().second < (220f * areaScale)) {
-                        hasBomb = true
                     } else {
                         val oval = HsvUtils.countPastelOvalInRect(
                             bitmap, cx - s(34f), cy - s(22f), cx + s(34f), cy + s(6f),
@@ -439,41 +451,57 @@ class ScreenAnalyzer {
         return CardVisualStats(isRedBackward, brightness)
     }
 
-    private fun detectLocalPlayerSeat(bitmap: Bitmap, hasHandCards: Boolean): PlayerColor {
-        if (!hasHandCards) return PlayerColor.BLUE
-        var minCardBacks = Int.MAX_VALUE
-        var bestColor = PlayerColor.BLUE
-        for ((color, nr) in CARDBACK_ZONES) {
-            val crop = safeCrop(bitmap, nr) ?: continue
-            val pixels = IntArray(crop.width * crop.height)
-            crop.getPixels(pixels, 0, crop.width, 0, 0, crop.width, crop.height)
-            var cbPx = 0
-            for (c in pixels) {
-                val r = (c shr 16) and 0xFF
-                val g = (c shr 8) and 0xFF
-                val b = c and 0xFF
-                if (r > 180 && (r - g) > 50 && (r - b) > 60) cbPx++
-            }
-            crop.recycle()
-            if (cbPx < minCardBacks) {
-                minCardBacks = cbPx
-                bestColor = color
-            }
-        }
-        return bestColor
-    }
-
-    private fun detectHammerProgress(bitmap: Bitmap, localColor: PlayerColor): Int {
+    /**
+     * Reads the colored circular avatar ring at all 4 corners to map each screen seat to its PlayerColor.
+     * In WePlay, the local player is always at BOTTOM_LEFT (next to the Hammer ring), while colors shuffle per match.
+     */
+    private fun detectSeatColors(bitmap: Bitmap): Map<ScreenSeat, PlayerColor> {
         val w = bitmap.width
         val h = bitmap.height
-        val (cxNorm, cyNorm) = when (localColor) {
-            PlayerColor.BLUE -> 0.252f to 0.654f
-            PlayerColor.RED -> 0.748f to 0.654f
-            PlayerColor.ORANGE -> 0.252f to 0.254f
-            PlayerColor.GREEN -> 0.748f to 0.254f
+        val rawBest = HashMap<ScreenSeat, Pair<PlayerColor, Int>>()
+        for ((seat, nr) in SEAT_AVATAR_RINGS) {
+            val counts = HsvUtils.countVividInRect(
+                bitmap,
+                (nr.x0 * w).toInt(), (nr.y0 * h).toInt(),
+                (nr.x1 * w).toInt(), (nr.y1 * h).toInt(),
+                step = 2
+            )
+            rawBest[seat] = counts.maxPlayerColor()
         }
-        val cx = (cxNorm * w).toInt()
-        val cy = (cyNorm * h).toInt()
+
+        val assigned = LinkedHashMap<ScreenSeat, PlayerColor>()
+        val used = HashSet<PlayerColor>()
+        // Assign highest-confidence seats first to guarantee a 1-to-1 bijection across all 4 colors
+        for ((seat, pair) in rawBest.entries.sortedByDescending { it.value.second }) {
+            val (color, px) = pair
+            if (px >= 300 && color !in used) {
+                assigned[seat] = color
+                used.add(color)
+            }
+        }
+        val defaults = mapOf(
+            ScreenSeat.TOP_LEFT to PlayerColor.ORANGE,
+            ScreenSeat.TOP_RIGHT to PlayerColor.GREEN,
+            ScreenSeat.BOTTOM_LEFT to PlayerColor.BLUE,
+            ScreenSeat.BOTTOM_RIGHT to PlayerColor.RED
+        )
+        for (seat in ScreenSeat.entries) {
+            if (seat !in assigned) {
+                val fallback = defaults[seat]!!.takeIf { it !in used }
+                    ?: PlayerColor.entries.first { it !in used }
+                assigned[seat] = fallback
+                used.add(fallback)
+            }
+        }
+        return assigned
+    }
+
+    private fun detectHammerProgress(bitmap: Bitmap): Int {
+        val w = bitmap.width
+        val h = bitmap.height
+        // Local player's Hammer upgrade ring is always located beside BOTTOM_LEFT seat
+        val cx = (0.252f * w).toInt()
+        val cy = (0.654f * h).toInt()
         val radius = (0.044f * w).toInt()
         if (cx - radius < 0 || cx + radius >= w || cy - radius < 0 || cy + radius >= h) return 0
 

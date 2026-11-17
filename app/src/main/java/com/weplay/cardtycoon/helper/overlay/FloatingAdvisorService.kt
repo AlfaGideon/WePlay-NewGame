@@ -11,6 +11,7 @@ import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.util.DisplayMetrics
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -218,13 +219,26 @@ class FloatingAdvisorService : Service() {
         mgr.createNotificationChannel(channel)
     }
 
+    private fun readRealScreenSize(): Pair<Int, Int> {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val b = windowManager.maximumWindowMetrics.bounds
+            b.width().coerceAtLeast(360) to b.height().coerceAtLeast(640)
+        } else {
+            val dm = DisplayMetrics()
+            @Suppress("DEPRECATION")
+            windowManager.defaultDisplay.getRealMetrics(dm)
+            dm.widthPixels.coerceAtLeast(360) to dm.heightPixels.coerceAtLeast(640)
+        }
+    }
+
     private fun attachOverlays() {
         detachOverlays()
 
         val overlayType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        val (realW, realH) = readRealScreenSize()
         val hlParams = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+            realW,
+            realH,
             overlayType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
@@ -232,8 +246,12 @@ class FloatingAdvisorService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                fitInsetsTypes = 0 // Do NOT shift overlay down below status bar or cutout!
             } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
             }
@@ -396,7 +414,16 @@ class FloatingAdvisorService : Service() {
     }
 
     private suspend fun processNextFrame(forceUnlock: Boolean) {
-        val frame = withContext(Dispatchers.Default) { captureManager.captureFrame() } ?: return
+        // On manual refresh, briefly hide our own overlay so MediaProjection captures a 100% clean screen!
+        if (forceUnlock && highlightView?.visibility == View.VISIBLE) {
+            highlightView?.visibility = View.INVISIBLE
+            delay(85L)
+        }
+        val frame = withContext(Dispatchers.Default) { captureManager.captureFrame() }
+        if (forceUnlock) {
+            highlightView?.visibility = View.VISIBLE
+        }
+        if (frame == null) return
         val snapshot = try {
             screenAnalyzer.analyze(frame, settings)
         } finally {

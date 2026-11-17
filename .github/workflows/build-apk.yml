@@ -37,20 +37,17 @@ jobs:
           echo "name=${VN}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VN}" >> "$GITHUB_OUTPUT"
 
-      - name: Decode Private Permanent Signing Key (if configured in Secrets)
+      - name: Check Signing Key Mode
         id: sign
         env:
-          KEYSTORE_B64: ${{ secrets.OTA_KEYSTORE_BASE64 }}
+          SINGLE_KEY: ${{ secrets.OTA_SIGNING_KEY }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then
-            echo "Using private permanent signing key from GitHub Secrets"
-            printf '%s' "$KEYSTORE_B64" | tr -d '\n\r ' | base64 -d > "${RUNNER_TEMP}/permanent-ota.p12"
-            echo "keystore_path=${RUNNER_TEMP}/permanent-ota.p12" >> "$GITHUB_OUTPUT"
-            echo "label=Приватный постоянный ключ (GitHub Secrets)" >> "$GITHUB_OUTPUT"
+          if [ -n "$SINGLE_KEY" ]; then
+            echo "Detected single private secret OTA_SIGNING_KEY"
+            echo "label=Приватный постоянный ключ (OTA_SIGNING_KEY)" >> "$GITHUB_OUTPUT"
           else
-            echo "Secrets not set yet — using built-in universal-ota.p12 fallback"
-            echo "keystore_path=" >> "$GITHUB_OUTPUT"
-            echo "label=Универсальный встроенный ключ (fallback)" >> "$GITHUB_OUTPUT"
+            echo "OTA_SIGNING_KEY not set yet — using built-in universal-ota.p12 fallback"
+            echo "label=Встроенный универсальный ключ (fallback)" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run Unit Tests
@@ -64,13 +61,24 @@ jobs:
 
       - name: Build Signed Release APK
         env:
-          OTA_KEYSTORE_PATH: ${{ steps.sign.outputs.keystore_path }}
-          OTA_KEYSTORE_TYPE: PKCS12
-          OTA_KEYSTORE_PASS: ${{ secrets.OTA_KEYSTORE_PASS }}
-          OTA_KEY_ALIAS: ${{ secrets.OTA_KEY_ALIAS }}
-          OTA_KEY_PASS: ${{ secrets.OTA_KEY_PASS }}
+          SINGLE_KEY: ${{ secrets.OTA_SIGNING_KEY }}
         run: |
           set -o pipefail
+          if [ -n "$SINGLE_KEY" ]; then
+            echo "Decoding single secret OTA_SIGNING_KEY for release signing..."
+            CLEAN=$(printf '%s' "$SINGLE_KEY" | tr -d '\n\r ')
+            ALIAS="${CLEAN%%|*}"
+            REST="${CLEAN#*|}"
+            PASS="${REST%%|*}"
+            B64="${REST#*|}"
+            echo "::add-mask::${PASS}"
+            printf '%s' "$B64" | base64 -d > "${RUNNER_TEMP}/permanent-ota.p12"
+            export OTA_KEYSTORE_PATH="${RUNNER_TEMP}/permanent-ota.p12"
+            export OTA_KEYSTORE_TYPE="PKCS12"
+            export OTA_KEYSTORE_PASS="${PASS}"
+            export OTA_KEY_ALIAS="${ALIAS}"
+            export OTA_KEY_PASS="${PASS}"
+          fi
           if ! gradle assembleRelease -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace 2>&1 | tee /tmp/release.log; then
             ERR=$(grep -E "FAILURE:|What went wrong:|> |e: file:" /tmp/release.log | tail -n 12 | tr '\n' ' ')
             echo "::error::Gradle assembleRelease failed: ${ERR}"

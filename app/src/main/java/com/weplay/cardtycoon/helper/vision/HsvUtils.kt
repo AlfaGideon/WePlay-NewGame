@@ -129,8 +129,8 @@ object HsvUtils {
                     counts.mud += weight
                 }
 
-                // Black/charcoal bomb sphere on white tile face
-                if (v < 0.28f && sat < 0.45f) {
+                // Glossy dark navy/slate bomb sphere on tile face (calibrated on real Bomb sprite: H~220, S~0.48, V~0.35)
+                if (v in 0.12f..0.46f && ((hue in 195f..255f && sat in 0.15f..0.72f) || sat < 0.30f)) {
                     counts.bombDark += weight
                 }
                 x += step
