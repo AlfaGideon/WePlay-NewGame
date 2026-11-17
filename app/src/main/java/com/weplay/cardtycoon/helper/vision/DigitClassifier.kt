@@ -5,6 +5,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Rect
 import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
 
 /**
  * Image preprocessing for crisp ML Kit OCR on stylized game graphics + structural fallback classifier
@@ -13,23 +15,26 @@ import kotlin.math.abs
 object DigitClassifier {
 
     /**
-     * Converts a card's central digit region into a clean, padded, high-contrast black-on-white bitmap
-     * suitable for ML Kit text recognition.
+     * Extracts the SOLID interior colored glyph of a card digit (avoiding hollow outlines and corner arrows!)
+     * using saturation + luminance gating followed by a 3x3 majority filter.
+     *
+     * Verified on both bright active cards and dimmed opponent-turn cards.
+     * Returns null if no valid digit glyph is present (prevents hallucinating cards from noise).
      */
-    fun preprocessCardDigit(cardBitmap: Bitmap): Bitmap {
+    fun preprocessCardDigit(cardBitmap: Bitmap): Bitmap? {
         val w = cardBitmap.width
         val h = cardBitmap.height
-        val x0 = (w * 0.16f).toInt()
-        val x1 = (w * 0.84f).toInt().coerceAtLeast(x0 + 1)
-        val y0 = (h * 0.22f).toInt()
-        val y1 = (h * 0.78f).toInt().coerceAtLeast(y0 + 1)
+        val x0 = (w * 0.18f).toInt()
+        val x1 = (w * 0.82f).toInt().coerceAtLeast(x0 + 1)
+        val y0 = (h * 0.24f).toInt()
+        val y1 = (h * 0.74f).toInt().coerceAtLeast(y0 + 1)
         val cw = x1 - x0
         val ch = y1 - y0
+        if (cw < 16 || ch < 16) return null
 
         val pixels = IntArray(cw * ch)
         cardBitmap.getPixels(pixels, 0, cw, x0, y0, cw, ch)
 
-        // Compute background luminance from border ring of the digit crop
         val borderLums = ArrayList<Int>(cw * 2 + ch * 2)
         for (x in 0 until cw) {
             borderLums.add(luminance(pixels[x]))
@@ -41,20 +46,56 @@ object DigitClassifier {
         }
         borderLums.sort()
         val bgLum = borderLums[borderLums.size / 2]
+        val minFillLum = (bgLum * 0.48f).toInt()
 
-        // Card digits are markedly darker than the pale checkered background (both when active and dimmed!)
-        val threshold = (bgLum - 26).coerceIn(35, 195)
-        val out = IntArray(cw * ch)
+        // Core colored digit interior: high saturation (>0.40) and brighter than the dark outer border
+        val raw = BooleanArray(cw * ch)
         for (i in pixels.indices) {
-            val lum = luminance(pixels[i])
-            out[i] = if (lum < threshold) Color.BLACK else Color.WHITE
+            val c = pixels[i]
+            val r = (c shr 16) and 0xFF
+            val g = (c shr 8) and 0xFF
+            val b = c and 0xFF
+            val mx = max(r, max(g, b))
+            val mn = min(r, min(g, b))
+            val sat = if (mx > 0) (mx - mn).toFloat() / mx.toFloat() else 0f
+            val lum = (r * 30 + g * 59 + b * 11) / 100
+            raw[i] = sat > 0.40f && lum >= minFillLum
+        }
+
+        // 3x3 majority filter (>= 6 neighbors) eliminates anti-aliased 1px outline halos completely
+        val out = IntArray(cw * ch)
+        var blackCount = 0
+        for (y in 0 until ch) {
+            val rowOff = y * cw
+            for (x in 0 until cw) {
+                var nb = 0
+                if (x in 1 until cw - 1 && y in 1 until ch - 1) {
+                    for (dy in -1..1) {
+                        val rIdx = (y + dy) * cw
+                        for (dx in -1..1) {
+                            if (raw[rIdx + x + dx]) nb++
+                        }
+                    }
+                }
+                if (nb >= 6) {
+                    out[rowOff + x] = Color.BLACK
+                    blackCount++
+                } else {
+                    out[rowOff + x] = Color.WHITE
+                }
+            }
+        }
+
+        // Reject empty or noisy crops so we NEVER invent fake cards
+        val fillRatio = blackCount.toFloat() / (cw * ch).toFloat()
+        if (fillRatio < 0.04f || fillRatio > 0.65f) {
+            return null
         }
 
         val tight = Bitmap.createBitmap(cw, ch, Bitmap.Config.ARGB_8888)
         tight.setPixels(out, 0, cw, 0, 0, cw, ch)
 
-        // Add clean white margin and scale up slightly for ML Kit stability
-        val pad = 24
+        val pad = 28
         val scale = 2
         val padded = Bitmap.createBitmap(cw * scale + pad * 2, ch * scale + pad * 2, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(padded)
@@ -69,10 +110,6 @@ object DigitClassifier {
         return padded
     }
 
-    /**
-     * Preprocesses white text on saturated colored background (e.g. player money pills)
-     * into crisp black-on-white digits for ML Kit.
-     */
     fun preprocessWhiteTextOnColor(pillBitmap: Bitmap, skipLeftFraction: Float = 0.28f): Bitmap {
         val w = pillBitmap.width
         val h = pillBitmap.height
@@ -103,9 +140,6 @@ object DigitClassifier {
         return padded
     }
 
-    /**
-     * Preprocesses light-gray rent text on white tile face into black-on-white for ML Kit.
-     */
     fun preprocessTilePrice(patch: Bitmap): Bitmap {
         val w = patch.width
         val h = patch.height
@@ -119,7 +153,6 @@ object DigitClassifier {
             val b = c and 0xFF
             val lum = (r * 30 + g * 59 + b * 11) / 100
             val spread = maxOf(r, g, b) - minOf(r, g, b)
-            // Tile numbers are neutral gray (low chroma spread) darker than white tile top (~240)
             val isDigit = spread < 35 && lum in 110..215
             out[i] = if (isDigit) Color.BLACK else Color.WHITE
         }
@@ -136,10 +169,6 @@ object DigitClassifier {
         return padded
     }
 
-    /**
-     * Parses a card digit value (1..12) from ML Kit recognized text, handling common OCR confusions
-     * (e.g. 'I'/'l' -> 1, 'S' -> 5, 'Z' -> 2, 'B' -> 8, 'O' -> 0).
-     */
     fun parseCardMagnitude(rawText: String): Pair<Int?, Boolean> {
         val cleaned = rawText.trim()
         val hasMinus = cleaned.contains('-') || cleaned.contains('−') || cleaned.contains('–')
@@ -161,9 +190,6 @@ object DigitClassifier {
         return valid to hasMinus
     }
 
-    /**
-     * Parses an integer cash/rent value from OCR text.
-     */
     fun parsePositiveInt(rawText: String, minVal: Int = 0, maxVal: Int = 999999): Int? {
         val digits = buildString {
             for (ch in rawText) {
@@ -181,8 +207,8 @@ object DigitClassifier {
     }
 
     /**
-     * Structural fallback classifier for bold single-digit cards when OCR misses a stylized glyph.
-     * Examines bounding-box aspect ratio, enclosed holes, and top/mid/bottom left/right stroke density.
+     * Conservative structural fallback classifier for crisp solid-black single digits (1..9).
+     * Returns null when ambiguous rather than guessing a nonexistent card.
      */
     fun fallbackClassifySingleDigit(binarizedPadded: Bitmap): Int? {
         val w = binarizedPadded.width
@@ -206,12 +232,12 @@ object DigitClassifier {
         }
         val bw = maxX - minX + 1
         val bh = maxY - minY + 1
-        if (bw < 12 || bh < 20 || blackCount < 100) return null
+        if (bw < 18 || bh < 32 || blackCount < 300) return null
 
         val aspect = bw.toFloat() / bh.toFloat()
-        if (aspect < 0.44f) return 1
+        if (aspect < 0.45f) return 1
+        if (aspect > 1.25f) return null // Likely two digits or non-digit
 
-        // Compute 3x3 zone fill ratios
         val z = FloatArray(9)
         for (zy in 0 until 3) {
             val y0 = minY + (bh * zy) / 3
@@ -232,11 +258,9 @@ object DigitClassifier {
             }
         }
 
-        // Count enclosed white holes via BFS from border
         val holes = countEnclosedHoles(pixels, w, h, minX, minY, maxX, maxY)
         if (holes >= 2) return 8
         if (holes == 1) {
-            // Distinguish 4, 6, 9, 0
             val topWeight = z[0] + z[1] + z[2]
             val botWeight = z[6] + z[7] + z[8]
             return when {
@@ -247,18 +271,13 @@ object DigitClassifier {
             }
         }
 
-        // Zero holes: distinguish 2, 3, 5, 7
         val botTotal = z[6] + z[7] + z[8]
         val topTotal = z[0] + z[1] + z[2]
-        if (topTotal > botTotal + 0.45f && z[6] < 0.30f && z[8] < 0.30f) return 7
-        // 5 has heavy top-left (z[0]) & bottom-right (z[8]), lighter bottom-left (z[6]) vs 2
+        if (topTotal > botTotal + 0.45f && z[6] < 0.28f && z[8] < 0.28f) return 7
         if (z[0] > z[2] && z[3] > z[5] * 0.85f && z[8] > 0.35f) return 5
-        // 2 has heavy bottom bar + top-right arc + light mid-left (z[3])
         if (z[3] < 0.32f && botTotal > 1.2f) return 2
-        // 3 has heavier right column than left column
         if (z[2] + z[5] + z[8] > z[0] + z[3] + z[6] + 0.35f) return 3
-
-        return if (abs(z[0] - z[2]) < 0.15f && z[3] < 0.35f) 2 else 5
+        return if (abs(z[0] - z[2]) < 0.15f && z[3] < 0.35f) 2 else null
     }
 
     private fun countEnclosedHoles(
@@ -316,7 +335,6 @@ object DigitClassifier {
             return area
         }
 
-        // Flood exterior white from top-left border
         for (x in 0 until bw) {
             if (!visited[x] && isWhite(x, 0)) flood(x, 0)
             val bot = (bh - 1) * bw + x
@@ -329,7 +347,6 @@ object DigitClassifier {
             if (!visited[right] && isWhite(bw - 1, y)) flood(bw - 1, y)
         }
 
-        // Count remaining interior white components of meaningful area
         val minHoleArea = ((bw * bh) * 0.012f).toInt().coerceAtLeast(18)
         var holes = 0
         for (y in 1 until bh - 1) {

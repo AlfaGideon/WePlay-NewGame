@@ -10,10 +10,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.view.View
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
+import com.weplay.cardtycoon.helper.BuildConfig
 import com.weplay.cardtycoon.helper.R
 import com.weplay.cardtycoon.helper.board.BoardDefinition
 import com.weplay.cardtycoon.helper.databinding.ActivityMainBinding
@@ -25,6 +29,8 @@ import com.weplay.cardtycoon.helper.model.StrategySettings
 import com.weplay.cardtycoon.helper.overlay.FloatingAdvisorService
 import com.weplay.cardtycoon.helper.storage.SettingsRepository
 import com.weplay.cardtycoon.helper.strategy.StrategyEngine
+import com.weplay.cardtycoon.helper.update.OtaUpdater
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -32,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var settingsRepo: SettingsRepository
     private var settings: StrategySettings = StrategySettings()
     private val strategyEngine = StrategyEngine()
+    private var otaBusy = false
 
     private val notifPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -66,9 +73,12 @@ class MainActivity : AppCompatActivity() {
         settingsRepo = SettingsRepository(this)
         settings = settingsRepo.load()
 
+        binding.tvVersionInfo.text = "Версия v${BuildConfig.VERSION_NAME} (код ${BuildConfig.VERSION_CODE}) · OTA без ключей"
+
         setupControls()
         refreshUiState()
         runDemoSimulation()
+        checkOtaUpdates(silentIfUpToDate = true)
     }
 
     override fun onResume() {
@@ -106,11 +116,14 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        binding.btnCheckOta.setOnClickListener {
+            checkOtaUpdates(silentIfUpToDate = false)
+        }
+
         binding.btnOpenSettings.setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
 
-        // Seat preference buttons
         val seatButtons = mapOf(
             binding.btnSeatAuto to null,
             binding.btnSeatBlue to PlayerColor.BLUE,
@@ -145,6 +158,85 @@ class MainActivity : AppCompatActivity() {
             settings = settings.copy(showTargetTileHighlight = isChecked)
             settingsRepo.save(settings)
             notifyServiceSettingsChanged()
+        }
+    }
+
+    private fun checkOtaUpdates(silentIfUpToDate: Boolean) {
+        if (otaBusy) return
+        otaBusy = true
+        binding.btnCheckOta.isEnabled = false
+        binding.tvOtaStatus.text = "🔄 Проверка обновлений GitHub Releases..."
+
+        lifecycleScope.launch {
+            val result = OtaUpdater.checkForUpdate()
+            otaBusy = false
+            binding.btnCheckOta.isEnabled = true
+
+            result.onSuccess { info ->
+                if (info.isNewer) {
+                    val mb = info.apkSizeBytes / (1024.0 * 1024.0)
+                    binding.tvOtaStatus.text = "✨ Доступна версия ${info.tagName} (${String.format("%.1f МБ", mb)})"
+                    showUpdateDialog(info)
+                } else {
+                    binding.tvOtaStatus.text = "✅ Установлена последняя версия (${info.tagName})"
+                    if (!silentIfUpToDate) {
+                        Toast.makeText(this@MainActivity, "Обновлений нет (${info.tagName})", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }.onFailure { err ->
+                binding.tvOtaStatus.text = "⚠ Не удалось проверить OTA: ${err.message}"
+                if (!silentIfUpToDate) {
+                    Toast.makeText(this@MainActivity, "Ошибка OTA: ${err.message}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun showUpdateDialog(info: OtaUpdater.UpdateInfo) {
+        if (isFinishing || isDestroyed) return
+        AlertDialog.Builder(this)
+            .setTitle("Обновление по воздуху ${info.tagName}")
+            .setMessage(info.releaseNotes)
+            .setPositiveButton("Скачать и установить") { _, _ ->
+                downloadAndInstallOta(info)
+            }
+            .setNegativeButton("Позже", null)
+            .show()
+    }
+
+    private fun downloadAndInstallOta(info: OtaUpdater.UpdateInfo) {
+        if (!OtaUpdater.canInstallPackages(this)) {
+            Toast.makeText(
+                this,
+                "Разрешите установку обновлений из «Карточный Советник» и нажмите снова",
+                Toast.LENGTH_LONG
+            ).show()
+            OtaUpdater.openInstallPermissionSettings(this)
+            return
+        }
+        if (otaBusy) return
+        otaBusy = true
+        binding.btnCheckOta.isEnabled = false
+        binding.progressOta.visibility = View.VISIBLE
+        binding.progressOta.progress = 0
+        binding.tvOtaStatus.text = "⬇ Загрузка ${info.tagName}: 0%"
+
+        lifecycleScope.launch {
+            val res = OtaUpdater.downloadApk(this@MainActivity, info.apkDownloadUrl) { pct ->
+                binding.progressOta.progress = pct
+                binding.tvOtaStatus.text = "⬇ Загрузка ${info.tagName}: $pct%"
+            }
+            otaBusy = false
+            binding.btnCheckOta.isEnabled = true
+            binding.progressOta.visibility = View.GONE
+
+            res.onSuccess { file ->
+                binding.tvOtaStatus.text = "✅ Загружено! Открываю установщик..."
+                OtaUpdater.launchApkInstaller(this@MainActivity, file)
+            }.onFailure { err ->
+                binding.tvOtaStatus.text = "⚠ Ошибка загрузки: ${err.message}"
+                Toast.makeText(this@MainActivity, "Ошибка загрузки: ${err.message}", Toast.LENGTH_LONG).show()
+            }
         }
     }
 
@@ -224,16 +316,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * Runs the live StrategyEngine on the exact Round 5 board state from the reference game
-     * so the user can immediately inspect how multi-turn hand planning works.
-     */
     private fun runDemoSimulation() {
         val tiles = BoardDefinition.defaultEmptyTiles().toMutableList()
         fun setOwned(idx: Int, owner: PlayerColor, rent: Int) {
             tiles[idx] = tiles[idx].copy(owner = owner, displayedRent = rent, houseLevel = 1)
         }
-        // Round 5 board configuration
         setOwned(5, PlayerColor.GREEN, 200)
         setOwned(8, PlayerColor.BLUE, 400)
         setOwned(9, PlayerColor.BLUE, 300)

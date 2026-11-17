@@ -21,8 +21,8 @@ enum class TileType(val labelRu: String) {
     SWORDS("Мечи (Дуэль/Союз)"),
     WALLET("Кошелёк (Кража)"),
     UFO("НЛО (Телепорт)"),
-    MYSTERY_BAG("Мешок «?»"),
-    MULTIPLIER_WHEEL("Барабан x1–x10")
+    MYSTERY_BAG("Мешок «?» (бонус/ловушка)"),
+    MULTIPLIER_WHEEL("Барабан x1–x4")
 }
 
 data class TileSpec(
@@ -41,16 +41,13 @@ data class TileState(
     val owner: PlayerColor? = null,
     val displayedRent: Int = basePrice,
     val houseLevel: Int = 0,
-    val hasMudTrap: Boolean = false,
+    val hasMudTrap: Boolean = false,   // Какашка: подскальзывается и теряет деньги
+    val hasBombTrap: Boolean = false,  // Бомба: взрыв и больница на 2 хода
     val hasIncomeDebuff: Boolean = false
 ) {
     val isFreeProperty: Boolean
         get() = type == TileType.PROPERTY && owner == null
 
-    /**
-     * Effective rent paid when an opponent lands on this tile.
-     * Uses live OCR displayed rent when available and sensible; otherwise falls back to model estimate.
-     */
     fun effectiveRent(ownerRentMultiplier: Double = 1.0): Int {
         if (type != TileType.PROPERTY || owner == null) return 0
         if (hasIncomeDebuff) {
@@ -111,6 +108,8 @@ data class BoardSnapshot(
     val handCards: List<HandCard>,
     val isMyTurn: Boolean = false,
     val calibration: BoardCalibration? = null,
+    val bitmapWidth: Int = 1080,
+    val bitmapHeight: Int = 2460,
     val timestampMs: Long = System.currentTimeMillis(),
     val statusNote: String = ""
 ) {
@@ -127,18 +126,19 @@ data class BoardSnapshot(
 data class StrategySettings(
     val preferredSeat: PlayerColor? = null, // null = auto-detect
     val autoScanEnabled: Boolean = true,
-    val autoScanIntervalMs: Long = 1500L,
+    val autoScanIntervalMs: Long = 1000L,
     val showCardHighlightOverlay: Boolean = true,
     val showTargetTileHighlight: Boolean = true,
     val goPassBonus: Int = 500,
     val goLandBonus: Int = 700,
-    val pinkWheelWeight: Double = 1.0,
+    val pinkWheelWeight: Double = 1.0, // Барабан x1..x4
     val ufoWeight: Double = 1.0,
     val walletStealRatio: Double = 0.25,
     val swordsWeight: Double = 1.0,
-    val chanceValue: Int = 160,
-    val mysteryBagValue: Int = 180,
-    val mudPenalty: Int = 220,
+    val chanceValue: Int = 150,
+    val mysteryBagValue: Int = 40,     // Может содержать ловушки (какашка/бомба)!
+    val mudPenalty: Int = 250,         // Какашка: потеря денег
+    val bombPenalty: Int = 420,        // Бомба: больница на 2 хода
     val riskAversion: Double = 1.25
 )
 

@@ -1,10 +1,13 @@
-name: Build Android APK
+name: Build Android APK & Publish OTA Release
 
 on:
   push:
     branches: ["**"]
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -25,21 +28,56 @@ jobs:
         with:
           gradle-version: "8.7"
 
+      - name: Compute Version
+        id: ver
+        run: |
+          VC=$((110 + GITHUB_RUN_NUMBER))
+          VN="1.1.${GITHUB_RUN_NUMBER}"
+          echo "code=${VC}" >> "$GITHUB_OUTPUT"
+          echo "name=${VN}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VN}" >> "$GITHUB_OUTPUT"
+
       - name: Run Unit Tests
-        run: gradle testDebugUnitTest --stacktrace
+        run: gradle testDebugUnitTest -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace
 
-      - name: Build Debug APK
-        run: gradle assembleDebug --stacktrace
+      - name: Build Universal-OTA Signed Release APK
+        run: gradle assembleRelease -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace
 
-      - name: Rename APK for download
+      - name: Prepare APK Output
         run: |
           mkdir -p apk_out
-          cp app/build/outputs/apk/debug/app-debug.apk apk_out/CardTycoonHelper-debug.apk
+          cp app/build/outputs/apk/release/app-release.apk "apk_out/CardTycoonHelper-v${{ steps.ver.outputs.name }}.apk"
+          cp app/build/outputs/apk/release/app-release.apk "apk_out/CardTycoonHelper-latest.apk"
           ls -lh apk_out/
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: CardTycoonHelper-APK
-          path: apk_out/CardTycoonHelper-debug.apk
+          path: apk_out/CardTycoonHelper-v${{ steps.ver.outputs.name }}.apk
           retention-days: 30
+
+      - name: Publish GitHub Release for OTA Auto-Updates (no secrets needed)
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.ver.outputs.tag }}"
+          APK="apk_out/CardTycoonHelper-v${{ steps.ver.outputs.name }}.apk"
+          NOTES="versionCode: ${{ steps.ver.outputs.code }}
+          Версия ${{ steps.ver.outputs.name }} — универсальная подпись OTA.
+          Изменения:
+          - Обновление по воздуху (OTA) прямо из приложения без секретных ключей
+          - Точная привязка подсветки карт и клеток (исправлен сдвиг выреза/статус-бара)
+          - Рекомендации фиксируются только на вашем ходу (без прыжков во время чужих ходов)
+          - Улучшенный OCR карт (сплошная заливка + консенсус 2 кадров, только реальные карты в руке)
+          - Обновлены правила: Барабан x1–x4, Бомба (больница 2 хода), Какашка (-деньги), Мешок с риском ловушек"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --target "${{ github.sha }}" \
+              --title "Карточный Советник ${TAG}" \
+              --notes "$NOTES" \
+              --latest
+          fi

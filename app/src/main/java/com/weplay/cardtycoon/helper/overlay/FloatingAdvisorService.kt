@@ -45,10 +45,14 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 /**
- * Foreground Service managing:
- *  1) Live MediaProjection screen capture loop,
- *  2) Floating draggable advisor widget (compact pill <-> expanded panel),
- *  3) Non-touchable pass-through highlight overlay directly over the game's 4 cards & board tiles.
+ * Foreground Service managing live MediaProjection screen capture and floating overlays.
+ *
+ * Uses a strict Turn-Lock + 2-Frame Consensus state machine:
+ *  - During opponents' turns (!isMyTurn): observes board changes silently without jumping recommendations
+ *    or drawing distracting overlays.
+ *  - When YOUR turn begins (isMyTurn == true): confirms hand cards across 2 consecutive stable frames,
+ *    computes the optimal multi-turn plan ONCE using ONLY real cards in hand, and LOCKS it for your turn!
+ *  - Unlocks automatically once your turn finishes (ready for the new board state next round) or on manual refresh.
  */
 class FloatingAdvisorService : Service() {
 
@@ -67,6 +71,12 @@ class FloatingAdvisorService : Service() {
             private set
     }
 
+    private enum class TurnState {
+        WAITING_OPPONENT,
+        STABILIZING_MY_TURN,
+        LOCKED_MY_TURN
+    }
+
     private lateinit var windowManager: WindowManager
     private lateinit var settingsRepo: SettingsRepository
     private val strategyEngine = StrategyEngine()
@@ -83,7 +93,12 @@ class FloatingAdvisorService : Service() {
     private var settings: StrategySettings = StrategySettings()
     private var isPaused: Boolean = false
     private var isMinimized: Boolean = false
-    private var lastSnapshot: BoardSnapshot? = null
+
+    private var turnState: TurnState = TurnState.WAITING_OPPONENT
+    private var pendingHandSignature: List<Int>? = null
+    private var stabilizeAttempts: Int = 0
+    private var missedTurnFrames: Int = 0
+    private var lockedSnapshot: BoardSnapshot? = null
     private var manualCardOverrides: MutableList<Int>? = null
 
     // UI references
@@ -119,7 +134,7 @@ class FloatingAdvisorService : Service() {
             }
             ACTION_RELOAD_SETTINGS -> {
                 settings = settingsRepo.load()
-                recomputeFromLastSnapshot()
+                recomputeLockedRecommendation()
                 return START_STICKY
             }
             ACTION_START -> {
@@ -140,6 +155,7 @@ class FloatingAdvisorService : Service() {
                 isRunning = true
                 settings = settingsRepo.load()
                 isPaused = !settings.autoScanEnabled
+                turnState = TurnState.WAITING_OPPONENT
                 attachOverlays()
                 startScanLoop()
             }
@@ -205,7 +221,6 @@ class FloatingAdvisorService : Service() {
     private fun attachOverlays() {
         detachOverlays()
 
-        // 1. Pass-through full-screen card & target-tile highlight overlay
         val overlayType = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         val hlParams = WindowManager.LayoutParams(
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -216,12 +231,17 @@ class FloatingAdvisorService : Service() {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
-        )
+        ).apply {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+            }
+        }
         val hlView = CardHighlightOverlay(this)
         windowManager.addView(hlView, hlParams)
         highlightView = hlView
 
-        // 2. Draggable floating advisor widget (parked near top so board & bottom hand stay clear!)
         val view = LayoutInflater.from(this).inflate(R.layout.overlay_advisor, null)
         val density = resources.displayMetrics.density
         val params = WindowManager.LayoutParams(
@@ -271,12 +291,11 @@ class FloatingAdvisorService : Service() {
         pauseBtn?.setOnClickListener {
             isPaused = !isPaused
             updateStatusHeader()
-            if (!isPaused) triggerSingleScan()
+            if (!isPaused) forceRecalculateNow()
         }
 
         view.findViewById<ImageButton>(R.id.btnRefresh).setOnClickListener {
-            manualCardOverrides = null
-            triggerSingleScan()
+            forceRecalculateNow()
         }
 
         view.findViewById<ImageButton>(R.id.btnMinimize).setOnClickListener {
@@ -350,36 +369,150 @@ class FloatingAdvisorService : Service() {
     private fun startScanLoop() {
         scanJob?.cancel()
         scanJob = serviceScope.launch {
-            delay(500L)
+            delay(450L)
             while (isActive) {
                 if (!isPaused) {
-                    runSingleCaptureAndEvaluate()
+                    processNextFrame(forceUnlock = false)
                 }
-                delay(settings.autoScanIntervalMs)
+                // Faster cadence while stabilizing your hand (280ms), relaxed polling otherwise
+                val sleepMs = when (turnState) {
+                    TurnState.STABILIZING_MY_TURN -> 280L
+                    TurnState.LOCKED_MY_TURN -> settings.autoScanIntervalMs.coerceAtLeast(1000L)
+                    TurnState.WAITING_OPPONENT -> settings.autoScanIntervalMs
+                }
+                delay(sleepMs)
             }
         }
     }
 
-    private fun triggerSingleScan() {
+    private fun forceRecalculateNow() {
+        manualCardOverrides = null
+        pendingHandSignature = null
+        stabilizeAttempts = 0
+        turnState = TurnState.WAITING_OPPONENT
         serviceScope.launch {
-            runSingleCaptureAndEvaluate()
+            processNextFrame(forceUnlock = true)
         }
     }
 
-    private suspend fun runSingleCaptureAndEvaluate() {
+    private suspend fun processNextFrame(forceUnlock: Boolean) {
         val frame = withContext(Dispatchers.Default) { captureManager.captureFrame() } ?: return
-        try {
-            val snapshot = screenAnalyzer.analyze(frame, settings)
-            // Clear manual overrides if the real hand card count or steps clearly changed
-            lastSnapshot = snapshot
-            val effectiveSnapshot = applyManualOverrides(snapshot)
-            val recommendation = withContext(Dispatchers.Default) {
-                strategyEngine.evaluate(effectiveSnapshot, settings)
-            }
-            renderRecommendation(recommendation)
+        val snapshot = try {
+            screenAnalyzer.analyze(frame, settings)
         } finally {
             if (!frame.isRecycled) frame.recycle()
         }
+
+        // Manual refresh forces immediate calculation if hand cards are visible (even dimmed)
+        if (forceUnlock && snapshot.handCards.isNotEmpty()) {
+            lockAndRenderForTurn(snapshot)
+            return
+        }
+
+        when (turnState) {
+            TurnState.WAITING_OPPONENT -> {
+                if (snapshot.isMyTurn && snapshot.handCards.isNotEmpty()) {
+                    // Your turn just started! Begin 2-frame consensus stabilization
+                    turnState = TurnState.STABILIZING_MY_TURN
+                    pendingHandSignature = snapshot.handCards.map { it.steps }
+                    stabilizeAttempts = 1
+                    missedTurnFrames = 0
+                    renderWaitingStatus(snapshot, stabilizing = true)
+                } else {
+                    // Opponents are playing: NEVER change or jump recommendations; just show calm waiting status
+                    renderWaitingStatus(snapshot, stabilizing = false)
+                }
+            }
+
+            TurnState.STABILIZING_MY_TURN -> {
+                if (!snapshot.isMyTurn || snapshot.handCards.isEmpty()) {
+                    // False alarm or turn ended before stabilizing
+                    turnState = TurnState.WAITING_OPPONENT
+                    pendingHandSignature = null
+                    stabilizeAttempts = 0
+                    renderWaitingStatus(snapshot, stabilizing = false)
+                    return
+                }
+                val currentSig = snapshot.handCards.map { it.steps }
+                stabilizeAttempts++
+                if (currentSig == pendingHandSignature || stabilizeAttempts >= 3) {
+                    // 2 consecutive identical frames reached -> LOCK recommendation for this entire turn!
+                    lockAndRenderForTurn(snapshot)
+                } else {
+                    pendingHandSignature = currentSig
+                    renderWaitingStatus(snapshot, stabilizing = true)
+                }
+            }
+
+            TurnState.LOCKED_MY_TURN -> {
+                // Recommendation is FROZEN during your turn (ZERO jumps!).
+                // Only unlock when your turn finishes (cards dim or disappear for 2 consecutive polls).
+                if (!snapshot.isMyTurn || snapshot.handCards.isEmpty()) {
+                    missedTurnFrames++
+                    if (missedTurnFrames >= 2) {
+                        turnState = TurnState.WAITING_OPPONENT
+                        pendingHandSignature = null
+                        stabilizeAttempts = 0
+                        missedTurnFrames = 0
+                        manualCardOverrides = null
+                        lockedSnapshot = null
+                        renderWaitingStatus(snapshot, stabilizing = false)
+                    }
+                } else {
+                    missedTurnFrames = 0
+                }
+            }
+        }
+    }
+
+    private suspend fun lockAndRenderForTurn(snapshot: BoardSnapshot) {
+        turnState = TurnState.LOCKED_MY_TURN
+        lockedSnapshot = snapshot
+        pendingHandSignature = null
+        stabilizeAttempts = 0
+        missedTurnFrames = 0
+        manualCardOverrides = null
+
+        val rec = withContext(Dispatchers.Default) {
+            strategyEngine.evaluate(snapshot, settings)
+        }
+        renderLockedRecommendation(rec)
+    }
+
+    private fun renderWaitingStatus(snap: BoardSnapshot, stabilizing: Boolean) {
+        // Hide card & tile overlays during opponents' turns so screen stays clean and never jumps!
+        highlightView?.update(null, settings)
+
+        val me = snap.player(snap.localPlayer)
+        updateSeatBadgeText(snap.localPlayer)
+
+        if (stabilizing) {
+            statusText?.text = "🔍 Читаю ваши карты..."
+            bestCardBadge?.text = "…"
+            bestCardBadge?.setBackgroundResource(R.drawable.bg_chip_normal)
+            bestHeadline?.text = "Ваш ход! Проверка карт..."
+            bestSubtext?.text = "Фиксирую стабильный расчёт"
+            miniPillText?.text = "🔍 Ваш ход · расчёт..."
+            return
+        }
+
+        statusText?.text = "⏳ Ход соперника · Р.${snap.round}/30 · 💰${me.money}"
+        warningText?.visibility = View.GONE
+        comboText?.visibility = View.GONE
+        bestCardBadge?.text = "⏳"
+        bestCardBadge?.setBackgroundResource(R.drawable.bg_chip_normal)
+        bestHeadline?.text = if (me.isBankrupt) {
+            "Вы обанкротились"
+        } else {
+            "Ждём ваш ход (соперники ходят)"
+        }
+        bestSubtext?.text = if (me.position != null) {
+            "Позиция: кл.#${me.position} · обновлю совет на вашем ходу"
+        } else {
+            snap.statusNote.ifBlank { "Откройте «Карточный магнат»" }
+        }
+        miniPillText?.text = "⏳ Ход соперника · ${snap.localPlayer.shortEmoji} 💰${me.money}"
+        movesContainer?.removeAllViews()
     }
 
     private fun applyManualOverrides(snapshot: BoardSnapshot): BoardSnapshot {
@@ -397,8 +530,8 @@ class FloatingAdvisorService : Service() {
         return snapshot.copy(handCards = updatedCards)
     }
 
-    private fun recomputeFromLastSnapshot() {
-        val snap = lastSnapshot ?: return
+    private fun recomputeLockedRecommendation() {
+        val snap = lockedSnapshot ?: return
         val adjusted = snap.copy(
             localPlayer = settings.preferredSeat ?: snap.localPlayer
         )
@@ -407,11 +540,11 @@ class FloatingAdvisorService : Service() {
             val rec = withContext(Dispatchers.Default) {
                 strategyEngine.evaluate(effective, settings)
             }
-            renderRecommendation(rec)
+            renderLockedRecommendation(rec)
         }
     }
 
-    private fun renderRecommendation(rec: RecommendationResult) {
+    private fun renderLockedRecommendation(rec: RecommendationResult) {
         highlightView?.update(rec, settings)
 
         val snap = rec.snapshot
@@ -419,9 +552,7 @@ class FloatingAdvisorService : Service() {
         val best = rec.bestMove
 
         updateSeatBadgeText(snap.localPlayer)
-
-        val turnLabel = if (snap.isMyTurn) "ВАШ ХОД" else "Р.${snap.round}/30"
-        statusText?.text = if (isPaused) "⏸ Пауза · $turnLabel" else "🟢 $turnLabel · 💰${me.money}"
+        statusText?.text = "🔒 ВАШ ХОД · Р.${snap.round}/30 · 💰${me.money}"
 
         if (rec.summaryWarning != null) {
             warningText?.visibility = View.VISIBLE
@@ -432,18 +563,16 @@ class FloatingAdvisorService : Service() {
 
         if (best == null) {
             bestCardBadge?.text = "—"
-            bestHeadline?.text = "Ожидание карт..."
-            bestSubtext?.text = snap.statusNote.ifBlank { "Откройте игру «Карточный магнат»" }
+            bestHeadline?.text = "Карты не распознаны"
+            bestSubtext?.text = "Нажмите ↻ для повторного скана"
             comboText?.visibility = View.GONE
-            miniPillText?.text = "★ Жду ход · ${snap.localPlayer.shortEmoji}"
+            miniPillText?.text = "★ Нажмите ↻ · ${snap.localPlayer.shortEmoji}"
             movesContainer?.removeAllViews()
             return
         }
 
-        // Compact pill summary
         miniPillText?.text = "★ ${best.card.label} → ${best.actionHeadline}"
 
-        // Hero best move card
         bestCardBadge?.text = best.card.label
         bestCardBadge?.setBackgroundResource(
             if (best.riskLevel == RiskLevel.LETHAL) R.drawable.bg_chip_danger else R.drawable.bg_chip_best
@@ -460,7 +589,6 @@ class FloatingAdvisorService : Service() {
             comboText?.visibility = View.GONE
         }
 
-        // Ranked list of all cards (tap any row to adjust card steps +/-1 if OCR misread!)
         val container = movesContainer ?: return
         container.removeAllViews()
         val inflater = LayoutInflater.from(this)
@@ -482,13 +610,12 @@ class FloatingAdvisorService : Service() {
             val sign = if (move.totalScore >= 0) "+" else ""
             tvScore.text = "${sign}${move.totalScore.toInt()}"
 
-            // Quick 1-tap correction: tap card chip to increment step (+1, wraps +10 -> -6), long-press resets overrides
             tvCard.setOnClickListener {
                 cycleCardStepOverride(snap, move)
             }
             tvCard.setOnLongClickListener {
                 manualCardOverrides = null
-                recomputeFromLastSnapshot()
+                recomputeLockedRecommendation()
                 true
             }
             container.addView(row)
@@ -507,7 +634,7 @@ class FloatingAdvisorService : Service() {
         }
         currentList[slot] = next
         manualCardOverrides = currentList
-        recomputeFromLastSnapshot()
+        recomputeLockedRecommendation()
     }
 
     private fun cyclePreferredSeat() {
@@ -517,7 +644,7 @@ class FloatingAdvisorService : Service() {
         settings = settings.copy(preferredSeat = nextSeat)
         settingsRepo.save(settings)
         updateSeatBadgeText(nextSeat)
-        recomputeFromLastSnapshot()
+        recomputeLockedRecommendation()
     }
 
     private fun updateSeatBadgeText(activeColor: PlayerColor? = settings.preferredSeat) {

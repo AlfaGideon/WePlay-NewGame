@@ -5,11 +5,9 @@ import com.weplay.cardtycoon.helper.model.BoardSnapshot
 import com.weplay.cardtycoon.helper.model.HandCard
 import com.weplay.cardtycoon.helper.model.MoveEvaluation
 import com.weplay.cardtycoon.helper.model.PlayerColor
-import com.weplay.cardtycoon.helper.model.PlayerState
 import com.weplay.cardtycoon.helper.model.RecommendationResult
 import com.weplay.cardtycoon.helper.model.RiskLevel
 import com.weplay.cardtycoon.helper.model.StrategySettings
-import com.weplay.cardtycoon.helper.model.TileState
 import com.weplay.cardtycoon.helper.model.TileType
 import kotlin.math.max
 import kotlin.math.min
@@ -17,13 +15,18 @@ import kotlin.math.min
 /**
  * Multi-turn game-theory advisor for WePlay "Карточный магнат".
  *
- * Evaluates every card in the current hand using:
- *  - Exact lookahead across all remaining card permutations in hand (up to 4! = 24),
- *  - Full rule modeling (CCW movement, GO bonus, 4-segment hammer rent scaling,
- *    UFO free-tile teleportation, Wallet target selection, Swords Duel 2x vs Alliance 50/50,
- *    Pink Wheel x1..x10 income multiplier, Chance sabotage, mud traps),
- *  - Opponent position & landing threat projection,
- *  - Dynamic cash safety buffer and bankruptcy avoidance.
+ * Strictly evaluates ONLY cards actually present in [BoardSnapshot.handCards].
+ * Models:
+ *  - Counter-clockwise (+) / clockwise (-) movement across 28 tiles,
+ *  - Multi-turn hand permutation lookahead (up to 4! = 24 exact sequences),
+ *  - 4-segment hammer rent upgrade synergy,
+ *  - UFO (free tile or cheapest fallback teleport),
+ *  - Wallet (steal from richest rival),
+ *  - Swords (Duel 2x vs Alliance 50/50 per opponent),
+ *  - Pink Wheel (x1..x4 income multiplier),
+ *  - Mystery Bag (risky bonus / traps),
+ *  - Bomb trap (hospital for 2 turns!) and Poop trap (slip & lose money!),
+ *  - Opponent position threat projection & bankruptcy avoidance.
  */
 class StrategyEngine {
 
@@ -31,7 +34,6 @@ class StrategyEngine {
         private const val LOOKAHEAD_DISCOUNT = 0.72
         private const val BANKRUPTCY_PENALTY = 12_000.0
 
-        // Empirical step probabilities for opponents when their hand is hidden
         private val FORWARD_STEP_PROBS = mapOf(
             1 to 0.08, 2 to 0.11, 3 to 0.12, 4 to 0.12,
             5 to 0.11, 6 to 0.10, 7 to 0.08, 8 to 0.06
@@ -87,7 +89,7 @@ class StrategyEngine {
             return RecommendationResult(
                 snapshot = snapshot,
                 rankedMoves = emptyList(),
-                summaryWarning = "Карты в руке не обнаружены. Можно ввести вручную."
+                summaryWarning = "Карты в руке не обнаружены."
             )
         }
 
@@ -129,7 +131,6 @@ class StrategyEngine {
                 0.0 to emptyList()
             }
 
-            // Also consider future danger zone after playing this card (what awaits in 1..8 steps ahead)
             val sectorSafetyAdjust = evaluateSectorAhead(
                 snapshot = snapshot,
                 fromTile = firstStep.nextState.position,
@@ -181,10 +182,6 @@ class StrategyEngine {
         )
     }
 
-    /**
-     * Exact recursion over remaining cards in the current hand (max 3! = 6 branches per first card).
-     * Memoizes equivalent card step values at the same level so duplicate cards (e.g. [7, 7]) are fast.
-     */
     private fun solveBestContinuation(
         snapshot: BoardSnapshot,
         state: SimState,
@@ -250,13 +247,15 @@ class StrategyEngine {
         val myColor = snapshot.localPlayer
         val stepResult = BoardDefinition.step(state.position, steps)
         val tile = snapshot.tiles[stepResult.targetIndex]
-        val reasons = if (collectReasons) mutableListOf<String>() else mutableListOf()
+        val reasons = mutableListOf<String>()
 
         var cash = state.cash
         var cashDelta = 0
         var score = 0.0
+        var trapRisk: RiskLevel? = null
+        var trapTag: String? = null
 
-        // 1. Passing GO bonus (forward moves only; landing directly on GO is handled in TileType.GO)
+        // 1. Passing GO bonus (forward moves only)
         if (stepResult.passedGo && !stepResult.landedOnGo) {
             cash += settings.goPassBonus
             cashDelta += settings.goPassBonus
@@ -264,13 +263,34 @@ class StrategyEngine {
             if (collectReasons) reasons.add("Проход GO: +${settings.goPassBonus}")
         }
 
-        // 2. Mud trap penalty (if tile has brown mud/poop obstacle)
-        if (tile.hasMudTrap) {
-            score -= settings.mudPenalty
-            if (collectReasons) reasons.add("Ловушка (грязь) на клетке: -${settings.mudPenalty}")
+        // 2. Traps on tile: Bomb (hospital 2 turns!) and Poop (slip & lose cash!)
+        val roundsLeft = snapshot.roundsRemaining
+        if (tile.hasBombTrap) {
+            // Skipping 2 turns hurts tempo, missed GO laps, and missed purchases
+            val tempoScale = (roundsLeft.toDouble() / 12.0).coerceIn(0.65, 1.45)
+            val penalty = settings.bombPenalty * tempoScale
+            score -= penalty
+            trapRisk = RiskLevel.DANGEROUS
+            trapTag = "💣 Бомба (больница 2 хода!)"
+            if (collectReasons) reasons.add("Ловушка БОМБА: взрыв и пропуск 2 ходов в больнице!")
         }
 
-        // Resolve effective ownership including tiles already bought earlier in our lookahead combo
+        if (tile.hasMudTrap) {
+            // Poop trap: player slips and loses money
+            val slipLoss = settings.mudPenalty
+            cash -= slipLoss
+            cashDelta -= slipLoss
+            score -= slipLoss * 1.15
+            if (cash <= 0) {
+                score -= BANKRUPTCY_PENALTY
+                trapRisk = RiskLevel.LETHAL
+            } else if (trapRisk == null) {
+                trapRisk = RiskLevel.MODERATE
+            }
+            if (trapTag == null) trapTag = "💩 Какашка (-$slipLoss)"
+            if (collectReasons) reasons.add("Ловушка какашка: подскальзывание, потеря ~$slipLoss")
+        }
+
         val effectiveOwner: PlayerColor? = when {
             tile.index in state.boughtTiles -> myColor
             else -> tile.owner
@@ -281,12 +301,11 @@ class StrategyEngine {
         var nextBought = state.boughtTiles
         var nextUpgraded = state.upgradedTiles
         var nextMult = state.ownRentMultiplier
-        var riskLevel = RiskLevel.SAFE
+        var riskLevel = trapRisk ?: RiskLevel.SAFE
         var actionHeadline: String
         var specialAdvice: String? = null
         var ufoTarget: Int? = null
 
-        val roundsLeft = snapshot.roundsRemaining
         val lateGameFactor = (roundsLeft.toDouble() / 16.0).coerceIn(0.18, 1.35)
         val myPortfolioBase = computeMyPortfolioBase(snapshot, myColor, state.boughtTiles)
 
@@ -294,25 +313,21 @@ class StrategyEngine {
             TileType.GO -> {
                 cash += settings.goLandBonus
                 cashDelta += settings.goLandBonus
-                score += settings.goLandBonus.toDouble() + 80.0 // safe square bonus
-                actionHeadline = "Старт GO (+${settings.goLandBonus})"
+                score += settings.goLandBonus.toDouble() + 80.0
+                actionHeadline = trapTag ?: "Старт GO (+${settings.goLandBonus})"
                 if (collectReasons) reasons.add("Попадание на GO: +${settings.goLandBonus}, безопасно")
             }
 
             TileType.PROPERTY -> {
                 when (effectiveOwner) {
                     null -> {
-                        // FREE PROPERTY: compare Buy vs Skip
                         val buyCost = tile.basePrice
                         val canAfford = cash >= buyCost
                         val postBuyCash = cash - buyCost
-
-                        // Expected future income from owning this tile
                         val hitFactor = 1.0 + oppHeat[tile.index] * 2.4
                         val expectedRentIncome =
                             buyCost * state.ownRentMultiplier * 0.42 * lateGameFactor * hitFactor
 
-                        // Hammer 4-segment upgrade synergy: every 4 purchases boosts ALL territories!
                         val newHammer = state.hammerProgress + 1
                         val hammerBonus = computeHammerSynergyBonus(
                             newHammer = newHammer,
@@ -321,7 +336,6 @@ class StrategyEngine {
                             roundsLeft = roundsLeft
                         )
 
-                        // Cash safety penalty if buying leaves us dangerously low on cash
                         val buyCashPenalty = computeLiquidityPenalty(
                             cashAfter = postBuyCash,
                             dangerBuffer = dangerBuffer,
@@ -329,9 +343,9 @@ class StrategyEngine {
                         )
 
                         val buyNetValue = expectedRentIncome + hammerBonus - buyCost * 0.62 - buyCashPenalty
-                        val skipValue = -15.0 // slight opportunity cost of empty step
+                        val skipValue = -15.0
 
-                        if (canAfford && buyNetValue > skipValue && postBuyCash > 0) {
+                        if (!tile.hasBombTrap && canAfford && buyNetValue > skipValue && postBuyCash > 0) {
                             cash = postBuyCash
                             cashDelta -= buyCost
                             score += buyNetValue
@@ -342,12 +356,13 @@ class StrategyEngine {
                             } else {
                                 nextHammer = newHammer
                             }
-                            riskLevel = classifyCashRisk(postBuyCash, dangerBuffer)
-                            actionHeadline = if (newHammer >= 4) {
+                            riskLevel = worstRisk(riskLevel, classifyCashRisk(postBuyCash, dangerBuffer))
+                            val buyLabel = if (newHammer >= 4) {
                                 "Купить за $buyCost (МОЛОТОК 4/4!)"
                             } else {
                                 "Купить за $buyCost"
                             }
+                            actionHeadline = if (trapTag != null) "$trapTag + $buyLabel" else buyLabel
                             if (collectReasons) {
                                 reasons.add("Свободная кл.#${tile.index} ($buyCost): выгодная покупка")
                                 if (newHammer >= 4) {
@@ -361,13 +376,13 @@ class StrategyEngine {
                             }
                         } else {
                             score += skipValue
-                            riskLevel = classifyCashRisk(cash, dangerBuffer)
-                            actionHeadline = if (!canAfford) {
+                            riskLevel = worstRisk(riskLevel, classifyCashRisk(cash, dangerBuffer))
+                            actionHeadline = trapTag ?: if (!canAfford) {
                                 "Свободна ($buyCost — не хватает)"
                             } else {
                                 "Не покупать (беречь кеш)"
                             }
-                            if (collectReasons) {
+                            if (collectReasons && trapTag == null) {
                                 reasons.add(
                                     if (!canAfford) "Недостаточно денег на покупку ($buyCost)"
                                     else "Безопаснее пропустить покупку и сохранить запас денег"
@@ -377,40 +392,37 @@ class StrategyEngine {
                     }
 
                     myColor -> {
-                        // OWN PROPERTY: zero rent + optional upgrade
                         val upgradeCost = tile.basePrice
                         val curLv = (tile.houseLevel.coerceAtLeast(1)) + (state.upgradedTiles[tile.index] ?: 0)
-                        val canUpgrade = curLv < 3 && cash - upgradeCost >= (dangerBuffer * 0.75).toInt()
+                        val canUpgrade = !tile.hasBombTrap && curLv < 3 && cash - upgradeCost >= (dangerBuffer * 0.75).toInt()
                         val hitFactor = 1.0 + oppHeat[tile.index] * 2.5
                         val upgradeRoi = upgradeCost * 0.45 * lateGameFactor * hitFactor - upgradeCost * 0.65
 
                         if (canUpgrade && upgradeRoi > 40.0) {
                             cash -= upgradeCost
                             cashDelta -= upgradeCost
-                            score += 90.0 + upgradeRoi // safe square + upgrade ROI
+                            score += 90.0 + upgradeRoi
                             nextUpgraded = state.upgradedTiles + (tile.index to ((state.upgradedTiles[tile.index] ?: 0) + 1))
-                            actionHeadline = "Своя клетка — улучшить ($upgradeCost)"
+                            actionHeadline = trapTag ?: "Своя клетка — улучшить ($upgradeCost)"
                             if (collectReasons) {
                                 reasons.add("Своя территория (аренда 0), выгодный апгрейд за $upgradeCost")
                             }
                         } else {
                             score += 90.0
-                            actionHeadline = "Своя клетка (безопасно)"
-                            if (collectReasons) {
+                            actionHeadline = trapTag ?: "Своя клетка (безопасно)"
+                            if (collectReasons && trapTag == null) {
                                 reasons.add("Своя территория — безопасно, без штрафа")
                             }
                         }
-                        riskLevel = classifyCashRisk(cash, dangerBuffer)
+                        riskLevel = worstRisk(riskLevel, classifyCashRisk(cash, dangerBuffer))
                     }
 
                     else -> {
-                        // OPPONENT PROPERTY: must pay rent!
                         val oppMult = estimatePlayerRentMultiplier(snapshot, effectiveOwner)
                         val rent = tile.effectiveRent(oppMult)
                         cash -= rent
                         cashDelta -= rent
 
-                        // Paying rent hurts twice: you lose rent AND opponent gains rent!
                         val oppLeaderWeight = if (isOpponentLeading(snapshot, effectiveOwner)) 1.35 else 1.15
                         var rentScore = -rent * oppLeaderWeight
 
@@ -420,15 +432,17 @@ class StrategyEngine {
                         } else {
                             val liqPen = computeLiquidityPenalty(cash, dangerBuffer, settings.riskAversion)
                             rentScore -= liqPen
-                            riskLevel = when {
+                            val r = when {
                                 rent >= 600 || cash < dangerBuffer * 0.5 -> RiskLevel.DANGEROUS
-                                rent >= 300 -> RiskLevel.MODERATE
                                 else -> RiskLevel.MODERATE
                             }
+                            riskLevel = worstRisk(riskLevel, r)
                         }
                         score += rentScore
                         actionHeadline = if (riskLevel == RiskLevel.LETHAL) {
                             "БАНКРОТСТВО! Штраф -$rent"
+                        } else if (trapTag != null) {
+                            "$trapTag + штраф -$rent"
                         } else {
                             "Чужая (${effectiveOwner.shortEmoji}) штраф -$rent"
                         }
@@ -443,7 +457,6 @@ class StrategyEngine {
             }
 
             TileType.UFO -> {
-                // UFO: teleport to ANY free tile, or cheapest tile if no free tiles remain!
                 val ufoDecision = chooseBestUfoDestination(
                     snapshot = snapshot,
                     state = state.copy(cash = cash),
@@ -458,7 +471,7 @@ class StrategyEngine {
                 nextHammer = ufoDecision.nextState.hammerProgress
                 nextBought = ufoDecision.nextState.boughtTiles
                 nextMult = ufoDecision.nextState.ownRentMultiplier
-                riskLevel = ufoDecision.riskLevel
+                riskLevel = worstRisk(riskLevel, ufoDecision.riskLevel)
 
                 score += ufoDecision.score * settings.ufoWeight
                 actionHeadline = "НЛО → кл.#${ufoDecision.targetIndex} (${ufoDecision.shortAction})"
@@ -470,13 +483,11 @@ class StrategyEngine {
             }
 
             TileType.WALLET -> {
-                // WALLET: choose an opponent to steal cash from!
                 val richestOpp = snapshot.aliveOpponents().maxByOrNull { it.money }
                 if (richestOpp != null && richestOpp.money > 0) {
                     val stolen = (richestOpp.money * settings.walletStealRatio).toInt().coerceAtLeast(80)
                     cash += stolen
                     cashDelta += stolen
-                    // You gain `stolen` AND rival loses `stolen`
                     score += stolen * 1.45
                     actionHeadline = "Кошелёк → красть у ${richestOpp.color.shortEmoji} (~+$stolen)"
                     specialAdvice = "Кошелёк: выбирай ${richestOpp.color.displayName} (${richestOpp.money})"
@@ -487,67 +498,68 @@ class StrategyEngine {
                     score += 120.0
                     actionHeadline = "Кошелёк (кража)"
                 }
-                riskLevel = classifyCashRisk(cash, dangerBuffer)
+                riskLevel = worstRisk(riskLevel, classifyCashRisk(cash, dangerBuffer))
             }
 
             TileType.SWORDS -> {
-                // SWORDS: choose an opponent for Duel (2x mutual rent) OR Alliance (50/50 profit & loss)!
-                val swordsPlan = chooseBestSwordsTarget(snapshot, myColor, state.boughtTiles, settings)
+                val swordsPlan = chooseBestSwordsTarget(snapshot, myColor, state.boughtTiles)
                 score += swordsPlan.score * settings.swordsWeight
                 actionHeadline = swordsPlan.headline
                 specialAdvice = swordsPlan.advice
                 if (collectReasons) {
                     reasons.add(swordsPlan.reason)
                 }
-                riskLevel = classifyCashRisk(cash, dangerBuffer)
+                riskLevel = worstRisk(riskLevel, classifyCashRisk(cash, dangerBuffer))
             }
 
             TileType.MULTIPLIER_WHEEL -> {
-                // PINK WHEEL: spin x1..x10 multiplier to income!
-                // Scales dramatically with how much property rent power you already own.
+                // PINK WHEEL: spin x1..x4 multiplier (max x4, avg ~x2.3) to income!
                 val myTotalRent = computeMyTotalRentPower(snapshot, myColor, state.boughtTiles, state.ownRentMultiplier)
-                val baseWheelEv = 130.0 + myTotalRent * 0.28 * lateGameFactor.coerceAtMost(1.1)
+                // Scaled accurately for x1..x4 (moderate baseline + strong boost when owning multiple houses)
+                val baseWheelEv = 85.0 + myTotalRent * 0.16 * lateGameFactor.coerceAtMost(1.0)
                 val wheelScore = baseWheelEv * settings.pinkWheelWeight
                 score += wheelScore
                 actionHeadline = if (myTotalRent >= 800) {
-                    "Барабан x1–x10 (ТОП при ваших домах!)"
+                    "Барабан x1–x4 (выгодно под дома!)"
                 } else {
-                    "Барабан x1–x10 (множитель дохода)"
+                    "Барабан x1–x4 (множитель дохода)"
                 }
-                specialAdvice = "Розовый барабан: множитель x1–x10 к доходу (текущая база аренды: $myTotalRent)"
+                specialAdvice = "Розовый барабан: множитель x1–x4 к доходу (текущая база: $myTotalRent)"
                 if (collectReasons) {
-                    reasons.add("Барабан x1–x10: буст дохода, особенно силён с ${countMyProperties(snapshot, myColor, state.boughtTiles)} терр.")
+                    reasons.add("Барабан x1–x4: множитель дохода (у вас ${countMyProperties(snapshot, myColor, state.boughtTiles)} терр.)")
                 }
-                riskLevel = classifyCashRisk(cash, dangerBuffer)
+                riskLevel = worstRisk(riskLevel, classifyCashRisk(cash, dangerBuffer))
             }
 
             TileType.CHANCE -> {
-                // YELLOW '?': random sabotage event (jail opponent, block rent, turn tile to mud, etc.)
                 val leaderRent = snapshot.aliveOpponents()
                     .maxOfOrNull { computeOpponentTotalRent(snapshot, it.color) } ?: 0
-                val sabotageBonus = min(leaderRent * 0.08, 180.0)
+                val sabotageBonus = min(leaderRent * 0.08, 170.0)
                 val chanceScore = settings.chanceValue + sabotageBonus
                 score += chanceScore
                 actionHeadline = "Карточка «?» (подстава/событие)"
                 val topThreatOpp = snapshot.aliveOpponents()
                     .maxByOrNull { computeOpponentTotalRent(snapshot, it.color) }
                 if (topThreatOpp != null && leaderRent > 0) {
-                    specialAdvice = "Если выпадет подстава — бей по ${topThreatOpp.color.displayName}"
+                    specialAdvice = "Подставу направляй на ${topThreatOpp.color.displayName}"
                 }
                 if (collectReasons) {
-                    reasons.add("Случайное событие/подстава (тюрьма, блок дохода, грязь)")
+                    reasons.add("Случайное событие/подстава (тюрьма, блок дохода, ловушки)")
                 }
-                riskLevel = classifyCashRisk(cash, dangerBuffer)
+                riskLevel = worstRisk(riskLevel, classifyCashRisk(cash, dangerBuffer))
             }
 
             TileType.MYSTERY_BAG -> {
-                val bagScore = settings.mysteryBagValue.toDouble()
+                // Purple bag can contain traps (poop/bomb) as well as bonuses!
+                val lowCashRiskPenalty = if (cash < dangerBuffer) 80.0 * settings.riskAversion else 0.0
+                val bagScore = settings.mysteryBagValue.toDouble() - lowCashRiskPenalty
                 score += bagScore
-                actionHeadline = "Мешок «?» (бонус)"
+                actionHeadline = "Мешок «?» (риск ловушек)"
+                specialAdvice = "Осторожно: в мешке бывают ловушки (бомба/какашка)"
                 if (collectReasons) {
-                    reasons.add("Фиолетовый мешок: безопасная клетка с бонусом")
+                    reasons.add("Фиолетовый мешок: возможны как бонусы, так и ловушки")
                 }
-                riskLevel = classifyCashRisk(cash, dangerBuffer)
+                riskLevel = worstRisk(riskLevel, if (cash < dangerBuffer) RiskLevel.MODERATE else RiskLevel.SAFE)
             }
         }
 
@@ -573,6 +585,9 @@ class StrategyEngine {
         )
     }
 
+    private fun worstRisk(a: RiskLevel, b: RiskLevel): RiskLevel =
+        if (a.ordinal >= b.ordinal) a else b
+
     private data class UfoDecision(
         val targetIndex: Int,
         val score: Double,
@@ -595,7 +610,11 @@ class StrategyEngine {
         val myPortfolioBase = computeMyPortfolioBase(snapshot, myColor, state.boughtTiles)
 
         val freeProperties = snapshot.tiles.filter {
-            it.type == TileType.PROPERTY && it.owner == null && it.index !in state.boughtTiles && !it.hasMudTrap
+            it.type == TileType.PROPERTY &&
+                it.owner == null &&
+                it.index !in state.boughtTiles &&
+                !it.hasMudTrap &&
+                !it.hasBombTrap
         }
 
         if (freeProperties.isNotEmpty()) {
@@ -647,8 +666,7 @@ class StrategyEngine {
             return best!!
         }
 
-        // No free properties left -> rule says you can pick a cheaper tile!
-        val candidateTiles = snapshot.tiles.filter { it.type == TileType.PROPERTY }
+        val candidateTiles = snapshot.tiles.filter { it.type == TileType.PROPERTY && !it.hasBombTrap }
         var bestFallback: UfoDecision? = null
         for (tile in candidateTiles) {
             val owner = if (tile.index in state.boughtTiles) myColor else tile.owner
@@ -657,17 +675,19 @@ class StrategyEngine {
             } else {
                 tile.effectiveRent(estimatePlayerRentMultiplier(snapshot, owner))
             }
-            val postCash = state.cash - rent
+            val mudCost = if (tile.hasMudTrap) settings.mudPenalty else 0
+            val totalCost = rent + mudCost
+            val postCash = state.cash - totalCost
             val sectorAfter = evaluateSectorAhead(snapshot, tile.index, myColor, postCash, settings)
-            val sc = -rent * 1.15 + sectorAfter + if (rent == 0) 90.0 else 0.0
+            val sc = -totalCost * 1.15 + sectorAfter + if (totalCost == 0) 90.0 else 0.0
             val risk = if (postCash <= 0) RiskLevel.LETHAL else classifyCashRisk(postCash, dangerBuffer)
             val decision = UfoDecision(
                 targetIndex = tile.index,
                 score = if (postCash <= 0) sc - BANKRUPTCY_PENALTY else sc,
-                cashDelta = -rent,
+                cashDelta = -totalCost,
                 nextState = state.copy(position = tile.index, cash = postCash),
                 riskLevel = risk,
-                shortAction = if (rent == 0) "своя (0)" else "дешёвая (-$rent)"
+                shortAction = if (totalCost == 0) "своя (0)" else "дешёвая (-$totalCost)"
             )
             if (bestFallback == null || decision.score > bestFallback.score) {
                 bestFallback = decision
@@ -686,8 +706,7 @@ class StrategyEngine {
     private fun chooseBestSwordsTarget(
         snapshot: BoardSnapshot,
         myColor: PlayerColor,
-        extraBought: Set<Int>,
-        settings: StrategySettings
+        extraBought: Set<Int>
     ): SwordsPlan {
         val opponents = snapshot.aliveOpponents()
         if (opponents.isEmpty()) {
@@ -702,13 +721,10 @@ class StrategyEngine {
         var bestPlan: SwordsPlan? = null
         for (opp in opponents) {
             val oppTotalRent = computeOpponentTotalRent(snapshot, opp.color)
-
-            // Positional threat: how much of my rent lies 1..12 steps ahead of opponent vs vice versa
             val oppPos = opp.position ?: 0
             val myRentAheadOfOpp = sumOwnerRentAhead(snapshot, oppPos, myColor, extraBought, 12)
             val oppRentAheadOfMe = sumOwnerRentAhead(snapshot, myPos, opp.color, emptySet(), 12)
 
-            // Option A: DUEL (2x mutual rent) — great when we have stronger territories & opponent is approaching them
             val duelEv = 110.0 +
                 (myTotalRent - oppTotalRent) * 0.16 +
                 (myRentAheadOfOpp - oppRentAheadOfMe) * 0.25 +
@@ -721,7 +737,6 @@ class StrategyEngine {
                 reason = "Дуэль x2 с ${opp.color.displayName}: ваши дома сильнее на его пути"
             )
 
-            // Option B: ALLIANCE (50/50 split of profit & loss) — huge when opponent dominates the board!
             val allianceEv = 120.0 +
                 (oppTotalRent - myTotalRent) * 0.22 +
                 oppRentAheadOfMe * 0.18
@@ -748,7 +763,6 @@ class StrategyEngine {
         roundsLeft: Int
     ): Double {
         val roundScale = (roundsLeft.toDouble() / 15.0).coerceIn(0.10, 1.30)
-        // Completing 4/4 boosts rent across ALL territories -> huge multiplier value!
         val fullUpgradeValue = portfolioBase * 0.48 * roundScale * (1.0 / currentMult.coerceAtLeast(1.0) + 0.5)
         return when {
             newHammer >= 4 -> fullUpgradeValue * 1.15
@@ -777,7 +791,6 @@ class StrategyEngine {
         if (cashAfter <= 0) return BANKRUPTCY_PENALTY
         if (cashAfter >= dangerBuffer) return 0.0
         val deficitRatio = (dangerBuffer - cashAfter).toDouble() / dangerBuffer.coerceAtLeast(1)
-        // Smooth quadratic risk curve as cash approaches 0
         return deficitRatio * deficitRatio * dangerBuffer * 0.75 * riskAversion
     }
 
@@ -815,6 +828,12 @@ class StrategyEngine {
         for ((step, prob) in FORWARD_STEP_PROBS) {
             val idx = BoardDefinition.step(fromTile, step).targetIndex
             val tile = snapshot.tiles[idx]
+            if (tile.hasBombTrap) {
+                expectedDanger += prob * settings.bombPenalty * 0.7
+            }
+            if (tile.hasMudTrap) {
+                expectedDanger += prob * settings.mudPenalty
+            }
             if (tile.type == TileType.PROPERTY && tile.owner != null && tile.owner != myColor) {
                 val rent = tile.effectiveRent(estimatePlayerRentMultiplier(snapshot, tile.owner))
                 val lethalExtra = if (rent >= myCash) 450.0 else 0.0
@@ -833,9 +852,8 @@ class StrategyEngine {
             .filter { !it.hasIncomeDebuff && it.basePrice > 0 && it.displayedRent >= it.basePrice }
             .map { it.displayedRent.toDouble() / it.basePrice.toDouble() }
         if (ratios.isNotEmpty()) {
-            return ratios.sorted()[ratios.size / 2].coerceIn(1.0, 10.0)
+            return ratios.sorted()[ratios.size / 2].coerceIn(1.0, 6.0)
         }
-        // Fallback: every 4 owned properties implies ~+1x hammer tier
         return 1.0 + (owned.size / 4)
     }
 

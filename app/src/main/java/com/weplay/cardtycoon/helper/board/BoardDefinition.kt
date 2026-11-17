@@ -7,11 +7,6 @@ import com.weplay.cardtycoon.helper.model.TileType
 /**
  * Exact 28-tile board topology of WePlay "Карточный магнат".
  * Indexed 0..27 in COUNTER-CLOCKWISE forward movement order starting at GO (index 0).
- *
- * Coordinate lattice (u, v) on [0..7] x [0..7]:
- *   GO  = (0, 0) [bottom vertex]
- *   UFO = (7, 7) [top vertex]
- *   u increases up-left; v increases up-right.
  */
 object BoardDefinition {
 
@@ -39,7 +34,7 @@ object BoardDefinition {
         TileSpec(18, 7, 3, TileType.MYSTERY_BAG, 0, "Мешок «?»"),
         TileSpec(19, 6, 3, TileType.PROPERTY, 200, "Кл.19 (200)"),
         TileSpec(20, 5, 3, TileType.PROPERTY, 400, "Кл.20 (400)"),
-        TileSpec(21, 5, 2, TileType.MULTIPLIER_WHEEL, 0, "Барабан x1-10"),
+        TileSpec(21, 5, 2, TileType.MULTIPLIER_WHEEL, 0, "Барабан x1–x4"),
         TileSpec(22, 5, 1, TileType.PROPERTY, 400, "Кл.22 (400)"),
         TileSpec(23, 5, 0, TileType.PROPERTY, 200, "Кл.23 (200)"),
         TileSpec(24, 4, 0, TileType.CHANCE, 0, "Карточка «?»"),
@@ -65,10 +60,6 @@ object BoardDefinition {
         val landedOnGo: Boolean
     )
 
-    /**
-     * Moves counter-clockwise for positive steps, clockwise for negative steps.
-     * Only forward (+) moves can pass GO to trigger a lap bonus.
-     */
     fun step(fromIndex: Int, steps: Int): StepResult {
         val normalizedFrom = ((fromIndex % TILE_COUNT) + TILE_COUNT) % TILE_COUNT
         val raw = normalizedFrom + steps
@@ -84,16 +75,10 @@ object BoardDefinition {
         )
     }
 
-    /**
-     * Forward (CCW) distance from tile [fromIndex] to tile [toIndex], in range 0..27.
-     */
     fun forwardDistance(fromIndex: Int, toIndex: Int): Int {
         return ((toIndex - fromIndex) % TILE_COUNT + TILE_COUNT) % TILE_COUNT
     }
 
-    /**
-     * Backward (CW) distance from tile [fromIndex] to tile [toIndex], in range 0..27.
-     */
     fun backwardDistance(fromIndex: Int, toIndex: Int): Int {
         return ((fromIndex - toIndex) % TILE_COUNT + TILE_COUNT) % TILE_COUNT
     }

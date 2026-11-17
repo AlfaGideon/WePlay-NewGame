@@ -18,9 +18,32 @@ class StrategyEngineTest {
     private val engine = StrategyEngine()
 
     @Test
+    fun recommendedCardIsAlwaysStrictlyPresentInHand() {
+        val tiles = BoardDefinition.defaultEmptyTiles()
+        val hand = listOf(HandCard(0, 1), HandCard(1, 5), HandCard(2, -3))
+        val players = mapOf(
+            PlayerColor.BLUE to PlayerState(PlayerColor.BLUE, money = 1200, position = 4, isLocal = true),
+            PlayerColor.GREEN to PlayerState(PlayerColor.GREEN, money = 1400, position = 12)
+        )
+        val snap = BoardSnapshot(
+            round = 6,
+            tiles = tiles,
+            players = players,
+            localPlayer = PlayerColor.BLUE,
+            handCards = hand
+        )
+        val result = engine.evaluate(snap)
+        val allowedSteps = hand.map { it.steps }.toSet()
+        assertEquals(hand.size, result.rankedMoves.size)
+        for (move in result.rankedMoves) {
+            assertTrue("Move ${move.card.steps} must exist in hand $allowedSteps", move.card.steps in allowedSteps)
+        }
+        assertTrue(result.bestMove!!.card.steps in allowedSteps)
+    }
+
+    @Test
     fun avoidsLethalOpponentRentUsingBackwardCard() {
         val tiles = BoardDefinition.defaultEmptyTiles().toMutableList()
-        // Tile 3 has Green's lethal 1200 rent; Tile 27 is empty
         tiles[3] = tiles[3].copy(owner = PlayerColor.GREEN, displayedRent = 1200, houseLevel = 1)
 
         val players = mapOf(
@@ -42,8 +65,54 @@ class StrategyEngineTest {
     }
 
     @Test
+    fun avoidsBombTrapHospitalPenalty() {
+        val tiles = BoardDefinition.defaultEmptyTiles().toMutableList()
+        // Tile 3 has a Bomb trap (hospital 2 turns), Tile 2 is clean
+        tiles[3] = tiles[3].copy(hasBombTrap = true)
+
+        val players = mapOf(
+            PlayerColor.BLUE to PlayerState(PlayerColor.BLUE, money = 1500, position = 1, isLocal = true),
+            PlayerColor.RED to PlayerState(PlayerColor.RED, money = 1500, position = 10)
+        )
+        val snapshot = BoardSnapshot(
+            round = 8,
+            tiles = tiles,
+            players = players,
+            localPlayer = PlayerColor.BLUE,
+            handCards = listOf(HandCard(0, 2), HandCard(1, 1))
+        )
+        val result = engine.evaluate(snapshot)
+        assertEquals(1, result.bestMove!!.card.steps)
+        val bombMove = result.rankedMoves.first { it.card.steps == 2 }
+        assertEquals(RiskLevel.DANGEROUS, bombMove.riskLevel)
+        assertTrue(bombMove.actionHeadline.contains("Бомба"))
+    }
+
+    @Test
+    fun poopTrapDeductsMoneyAndPrefersCleanTile() {
+        val tiles = BoardDefinition.defaultEmptyTiles().toMutableList()
+        tiles[12] = tiles[12].copy(hasMudTrap = true)
+
+        val players = mapOf(
+            PlayerColor.BLUE to PlayerState(PlayerColor.BLUE, money = 1200, position = 10, isLocal = true),
+            PlayerColor.ORANGE to PlayerState(PlayerColor.ORANGE, money = 1500, position = 20)
+        )
+        val snapshot = BoardSnapshot(
+            round = 8,
+            tiles = tiles,
+            players = players,
+            localPlayer = PlayerColor.BLUE,
+            handCards = listOf(HandCard(0, 2), HandCard(1, 3)) // 12=poop, 13=clean 200
+        )
+        val result = engine.evaluate(snapshot)
+        assertEquals(3, result.bestMove!!.card.steps)
+        val poopMove = result.rankedMoves.first { it.card.steps == 2 }
+        assertTrue(poopMove.immediateCashDelta < 0)
+        assertTrue(poopMove.actionHeadline.contains("Какашка"))
+    }
+
+    @Test
     fun ufoPicksFreePropertyOrFallsBackToCheapestWhenNoneFree() {
-        // Case 1: Free high-value property available
         val tiles = BoardDefinition.defaultEmptyTiles().toMutableList()
         for (idx in BoardDefinition.PROPERTY_INDICES) {
             if (idx != 20) {
@@ -59,12 +128,11 @@ class StrategyEngineTest {
             tiles = tiles,
             players = players,
             localPlayer = PlayerColor.BLUE,
-            handCards = listOf(HandCard(0, 4)) // 10 + 4 = 14 (UFO)
+            handCards = listOf(HandCard(0, 4))
         )
         val resFree = engine.evaluate(snapFree)
         assertEquals(20, resFree.bestMove!!.recommendedUfoTile)
 
-        // Case 2: NO free properties at all -> picks cheapest rent tile (tile 1, rent 100)
         val allOwned = tiles.toMutableList()
         allOwned[20] = allOwned[20].copy(owner = PlayerColor.GREEN, displayedRent = 1200, houseLevel = 1)
         allOwned[1] = allOwned[1].copy(owner = PlayerColor.ORANGE, displayedRent = 100, houseLevel = 1)
@@ -86,7 +154,7 @@ class StrategyEngineTest {
             tiles = tiles,
             players = players,
             localPlayer = PlayerColor.BLUE,
-            handCards = listOf(HandCard(0, 3)) // 8 + 3 = 11 (WALLET)
+            handCards = listOf(HandCard(0, 3))
         )
         val result = engine.evaluate(snapshot)
         assertNotNull(result.bestMove!!.specialAdvice)
@@ -95,7 +163,6 @@ class StrategyEngineTest {
 
     @Test
     fun swordsRecommendsAllianceAgainstDominantLeaderAndDuelWhenLeading() {
-        // Dominant opponent Green owns huge 1200 rents -> should recommend ALLIANCE (50/50)
         val tilesDom = BoardDefinition.defaultEmptyTiles().toMutableList()
         for (idx in listOf(8, 9, 10, 12, 13, 15, 16)) {
             tilesDom[idx] = tilesDom[idx].copy(owner = PlayerColor.GREEN, displayedRent = 1200, houseLevel = 1)
@@ -109,12 +176,11 @@ class StrategyEngineTest {
             tiles = tilesDom,
             players = players,
             localPlayer = PlayerColor.BLUE,
-            handCards = listOf(HandCard(0, 2)) // 5 + 2 = 7 (SWORDS)
+            handCards = listOf(HandCard(0, 2))
         )
         val resAlliance = engine.evaluate(snapAlliance)
         assertTrue(resAlliance.bestMove!!.specialAdvice!!.contains("СОЮЗ"))
 
-        // Now flip: Blue dominates right ahead of Green -> should recommend DUEL (x2)
         val tilesLead = BoardDefinition.defaultEmptyTiles().toMutableList()
         for (idx in listOf(22, 23, 25, 26, 27, 1, 2)) {
             tilesLead[idx] = tilesLead[idx].copy(owner = PlayerColor.BLUE, displayedRent = 900, houseLevel = 1)
@@ -125,7 +191,7 @@ class StrategyEngineTest {
     }
 
     @Test
-    fun pinkWheelValueScalesUpWithOwnedPortfolio() {
+    fun pinkWheelReflectsX4MaxScalingWithPortfolio() {
         val emptyTiles = BoardDefinition.defaultEmptyTiles()
         val richTiles = emptyTiles.toMutableList()
         for (idx in listOf(3, 8, 15, 20, 22)) {
@@ -135,17 +201,18 @@ class StrategyEngineTest {
             PlayerColor.BLUE to PlayerState(PlayerColor.BLUE, money = 1400, position = 19, isLocal = true),
             PlayerColor.RED to PlayerState(PlayerColor.RED, money = 1400, position = 5)
         )
-        val hand = listOf(HandCard(0, 2)) // 19 + 2 = 21 (PINK WHEEL)
+        val hand = listOf(HandCard(0, 2)) // 19 + 2 = 21 (PINK WHEEL x1..x4)
 
-        val scoreEmpty = engine.evaluate(
+        val evalEmpty = engine.evaluate(
             BoardSnapshot(round = 10, tiles = emptyTiles, players = players, localPlayer = PlayerColor.BLUE, handCards = hand)
-        ).bestMove!!.immediateScore
+        ).bestMove!!
 
-        val scoreRich = engine.evaluate(
+        val evalRich = engine.evaluate(
             BoardSnapshot(round = 10, tiles = richTiles, players = players, localPlayer = PlayerColor.BLUE, handCards = hand)
-        ).bestMove!!.immediateScore
+        ).bestMove!!
 
-        assertTrue("Pink wheel should be much stronger with 5 owned properties", scoreRich > scoreEmpty + 400.0)
+        assertTrue(evalRich.actionHeadline.contains("x1–x4"))
+        assertTrue("Pink wheel x1..x4 should scale up with 5 owned properties", evalRich.immediateScore > evalEmpty.immediateScore + 300.0)
     }
 
     @Test

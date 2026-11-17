@@ -16,7 +16,8 @@ object HsvUtils {
         var blue: Int = 0,
         var red: Int = 0,
         var yellowFace: Int = 0,
-        var mud: Int = 0
+        var mud: Int = 0,
+        var bombDark: Int = 0
     ) {
         fun forColor(color: PlayerColor): Int = when (color) {
             PlayerColor.ORANGE -> orange
@@ -58,9 +59,6 @@ object HsvUtils {
         }
     }
 
-    /**
-     * Converts packed ARGB pixel into (H in 0..360, S in 0..1, V in 0..1) into [outHsv].
-     */
     fun pixelToHsv(argb: Int, outHsv: FloatArray) {
         val r = ((argb shr 16) and 0xFF) / 255f
         val g = ((argb shr 8) and 0xFF) / 255f
@@ -113,7 +111,6 @@ object HsvUtils {
                 val sat = hsv[1]
                 val v = hsv[2]
 
-                // Vivid player colors calibrated to reject muted terracotta courtyard (S ~ 0.40..0.50)
                 if (hue in 16f..38f && sat > 0.62f && v > 0.82f) {
                     counts.orange += weight
                 } else if (hue in 135f..178f && sat > 0.48f && v > 0.35f) {
@@ -130,6 +127,11 @@ object HsvUtils {
 
                 if (hue in 18f..36f && sat > 0.45f && v in 0.32f..0.78f) {
                     counts.mud += weight
+                }
+
+                // Black/charcoal bomb sphere on white tile face
+                if (v < 0.28f && sat < 0.45f) {
+                    counts.bombDark += weight
                 }
                 x += step
             }

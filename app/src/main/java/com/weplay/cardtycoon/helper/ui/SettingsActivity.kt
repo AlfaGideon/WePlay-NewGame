@@ -29,15 +29,15 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun bindValues() {
-        // Scan interval: 800..3000ms (step 100ms, 0..22)
-        binding.seekInterval.max = 22
-        binding.seekInterval.progress = ((settings.autoScanIntervalMs - 800L) / 100L).toInt().coerceIn(0, 22)
+        // Scan interval: 600..3000ms (step 100ms, 0..24)
+        binding.seekInterval.max = 24
+        binding.seekInterval.progress = ((settings.autoScanIntervalMs - 600L) / 100L).toInt().coerceIn(0, 24)
 
         // GO pass bonus: 100..1500 (step 50, 0..28)
         binding.seekGoBonus.max = 28
         binding.seekGoBonus.progress = ((settings.goPassBonus - 100) / 50).coerceIn(0, 28)
 
-        // Pink wheel weight: 0.4..2.0 (step 0.1, 0..16)
+        // Pink wheel x1..x4 weight: 0.4..2.0 (step 0.1, 0..16)
         binding.seekPinkWheel.max = 16
         binding.seekPinkWheel.progress = ((settings.pinkWheelWeight - 0.4) * 10).toInt().coerceIn(0, 16)
 
@@ -53,9 +53,17 @@ class SettingsActivity : AppCompatActivity() {
         binding.seekSwords.max = 16
         binding.seekSwords.progress = ((settings.swordsWeight - 0.4) * 10).toInt().coerceIn(0, 16)
 
-        // Mystery bag value: 0..600 (step 20, 0..30)
-        binding.seekBag.max = 30
-        binding.seekBag.progress = (settings.mysteryBagValue / 20).coerceIn(0, 30)
+        // Mystery bag value: -200..+300 (step 20, 0..25) — reflects trap risk!
+        binding.seekBag.max = 25
+        binding.seekBag.progress = ((settings.mysteryBagValue + 200) / 20).coerceIn(0, 25)
+
+        // Bomb trap penalty (hospital 2 turns): 100..800 (step 20, 0..35)
+        binding.seekBomb.max = 35
+        binding.seekBomb.progress = ((settings.bombPenalty - 100) / 20).coerceIn(0, 35)
+
+        // Poop trap penalty (-money): 50..600 (step 25, 0..22)
+        binding.seekMud.max = 22
+        binding.seekMud.progress = ((settings.mudPenalty - 50) / 25).coerceIn(0, 22)
 
         // Risk aversion: 0.5..2.5 (step 0.1, 0..20)
         binding.seekRisk.max = 20
@@ -71,7 +79,10 @@ class SettingsActivity : AppCompatActivity() {
         binding.tvUfoVal.text = String.format("x%.1f", settings.ufoWeight)
         binding.tvWalletVal.text = "${(settings.walletStealRatio * 100).toInt()}%"
         binding.tvSwordsVal.text = String.format("x%.1f", settings.swordsWeight)
-        binding.tvBagVal.text = "+${settings.mysteryBagValue}"
+        val bagSign = if (settings.mysteryBagValue >= 0) "+" else ""
+        binding.tvBagVal.text = "${bagSign}${settings.mysteryBagValue}"
+        binding.tvBombVal.text = "-${settings.bombPenalty}"
+        binding.tvMudVal.text = "-${settings.mudPenalty}"
         binding.tvRiskVal.text = String.format("x%.1f", settings.riskAversion)
     }
 
@@ -90,7 +101,7 @@ class SettingsActivity : AppCompatActivity() {
         }
 
         binding.seekInterval.onChanged { p ->
-            settings = settings.copy(autoScanIntervalMs = 800L + p * 100L)
+            settings = settings.copy(autoScanIntervalMs = 600L + p * 100L)
         }
         binding.seekGoBonus.onChanged { p ->
             val pass = 100 + p * 50
@@ -109,7 +120,13 @@ class SettingsActivity : AppCompatActivity() {
             settings = settings.copy(swordsWeight = 0.4 + p * 0.1)
         }
         binding.seekBag.onChanged { p ->
-            settings = settings.copy(mysteryBagValue = p * 20)
+            settings = settings.copy(mysteryBagValue = -200 + p * 20)
+        }
+        binding.seekBomb.onChanged { p ->
+            settings = settings.copy(bombPenalty = 100 + p * 20)
+        }
+        binding.seekMud.onChanged { p ->
+            settings = settings.copy(mudPenalty = 50 + p * 25)
         }
         binding.seekRisk.onChanged { p ->
             settings = settings.copy(riskAversion = 0.5 + p * 0.1)

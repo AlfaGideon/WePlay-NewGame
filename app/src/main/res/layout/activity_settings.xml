@@ -24,11 +24,10 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Настройте приоритеты спецклеток и осторожность алгоритма"
+            android:text="Настройте приоритеты спецклеток, ловушек и осторожность алгоритма"
             android:textColor="@color/text_secondary"
             android:textSize="12sp" />
 
-        <!-- Interval -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -37,29 +36,27 @@
             android:orientation="vertical"
             android:padding="14dp">
 
+            <!-- Interval -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Интервал авто-сканирования"
+                    android:text="Интервал проверки хода"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvIntervalVal"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="1.5 сек"
+                    android:text="1.0 сек"
                     android:textColor="@color/accent_emerald"
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekInterval"
                 android:layout_width="match_parent"
@@ -72,7 +69,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -80,7 +76,6 @@
                     android:text="Бонус круга GO"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvGoBonusVal"
                     android:layout_width="wrap_content"
@@ -90,28 +85,25 @@
                     android:textSize="12sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekGoBonus"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp" />
 
-            <!-- Pink Wheel -->
+            <!-- Pink Wheel x1-x4 -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Розовая (Барабан x1–x10)"
+                    android:text="Розовая (Барабан x1–x4)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvPinkWheelVal"
                     android:layout_width="wrap_content"
@@ -121,7 +113,6 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekPinkWheel"
                 android:layout_width="match_parent"
@@ -134,7 +125,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -142,7 +132,6 @@
                     android:text="НЛО (Телепорт на свободную)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvUfoVal"
                     android:layout_width="wrap_content"
@@ -152,7 +141,6 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekUfo"
                 android:layout_width="match_parent"
@@ -165,7 +153,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -173,7 +160,6 @@
                     android:text="Кошелёк (оценка кражи от кеша)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvWalletVal"
                     android:layout_width="wrap_content"
@@ -183,7 +169,6 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekWallet"
                 android:layout_width="match_parent"
@@ -196,7 +181,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -204,7 +188,6 @@
                     android:text="Мечи (Дуэль x2 / Союз 50/50)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvSwordsVal"
                     android:layout_width="wrap_content"
@@ -214,40 +197,92 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekSwords"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp" />
 
-            <!-- Mystery Bag -->
+            <!-- Mystery Bag (risky!) -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
-                    android:text="Фиолетовый мешок «?»"
+                    android:text="Мешок «?» (бонус / ловушки)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvBagVal"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="+180"
+                    android:text="+40"
                     android:textColor="@color/accent_emerald"
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekBag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" />
+
+            <!-- Bomb Trap -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="💣 Бомба (больница 2 хода)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+                <TextView
+                    android:id="@+id/tvBombVal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="-420"
+                    android:textColor="@color/accent_danger"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+            <SeekBar
+                android:id="@+id/seekBomb"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp" />
+
+            <!-- Poop Trap -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:orientation="horizontal">
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="💩 Какашка (потеря денег)"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp" />
+                <TextView
+                    android:id="@+id/tvMudVal"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="-250"
+                    android:textColor="@color/accent_danger"
+                    android:textSize="13sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+            <SeekBar
+                android:id="@+id/seekMud"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp" />
@@ -258,7 +293,6 @@
                 android:layout_height="wrap_content"
                 android:layout_marginTop="12dp"
                 android:orientation="horizontal">
-
                 <TextView
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
@@ -266,7 +300,6 @@
                     android:text="Осторожность (защита от банкротства)"
                     android:textColor="@color/text_primary"
                     android:textSize="13sp" />
-
                 <TextView
                     android:id="@+id/tvRiskVal"
                     android:layout_width="wrap_content"
@@ -276,7 +309,6 @@
                     android:textSize="13sp"
                     android:textStyle="bold" />
             </LinearLayout>
-
             <SeekBar
                 android:id="@+id/seekRisk"
                 android:layout_width="match_parent"

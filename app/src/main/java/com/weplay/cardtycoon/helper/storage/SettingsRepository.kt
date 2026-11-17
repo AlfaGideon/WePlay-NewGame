@@ -14,7 +14,7 @@ class SettingsRepository(context: Context) {
         return StrategySettings(
             preferredSeat = seat,
             autoScanEnabled = prefs.getBoolean("auto_scan", true),
-            autoScanIntervalMs = prefs.getLong("scan_interval_ms", 1500L).coerceIn(700L, 4000L),
+            autoScanIntervalMs = prefs.getLong("scan_interval_ms", 1000L).coerceIn(600L, 4000L),
             showCardHighlightOverlay = prefs.getBoolean("show_card_highlight", true),
             showTargetTileHighlight = prefs.getBoolean("show_tile_highlight", true),
             goPassBonus = prefs.getInt("go_pass_bonus", 500),
@@ -23,9 +23,10 @@ class SettingsRepository(context: Context) {
             ufoWeight = prefs.getFloat("ufo_weight", 1.0f).toDouble(),
             walletStealRatio = prefs.getFloat("wallet_steal_ratio", 0.25f).toDouble(),
             swordsWeight = prefs.getFloat("swords_weight", 1.0f).toDouble(),
-            chanceValue = prefs.getInt("chance_value", 160),
-            mysteryBagValue = prefs.getInt("mystery_bag_value", 180),
-            mudPenalty = prefs.getInt("mud_penalty", 220),
+            chanceValue = prefs.getInt("chance_value", 150),
+            mysteryBagValue = prefs.getInt("mystery_bag_value", 40),
+            mudPenalty = prefs.getInt("mud_penalty", 250),
+            bombPenalty = prefs.getInt("bomb_penalty", 420),
             riskAversion = prefs.getFloat("risk_aversion", 1.25f).toDouble()
         )
     }
@@ -46,6 +47,7 @@ class SettingsRepository(context: Context) {
             .putInt("chance_value", settings.chanceValue)
             .putInt("mystery_bag_value", settings.mysteryBagValue)
             .putInt("mud_penalty", settings.mudPenalty)
+            .putInt("bomb_penalty", settings.bombPenalty)
             .putFloat("risk_aversion", settings.riskAversion.toFloat())
             .apply()
     }
