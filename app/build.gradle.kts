@@ -27,16 +27,21 @@ android {
 
     signingConfigs {
         create("universalOta") {
-            val customPath = System.getenv("OTA_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }
-            val customPass = System.getenv("OTA_KEYSTORE_PASS")?.takeIf { it.isNotBlank() }
-            val customAlias = System.getenv("OTA_KEY_ALIAS")?.takeIf { it.isNotBlank() }
-            val customKeyPass = System.getenv("OTA_KEY_PASS")?.takeIf { it.isNotBlank() }
+            val envPath = System.getenv("OTA_KEYSTORE_PATH")
+            val envType = System.getenv("OTA_KEYSTORE_TYPE")
+            val envPass = System.getenv("OTA_KEYSTORE_PASS")
+            val envAlias = System.getenv("OTA_KEY_ALIAS")
+            val envKeyPass = System.getenv("OTA_KEY_PASS")
 
-            storeFile = if (customPath != null) java.io.File(customPath) else file("signing/universal-ota.p12")
-            storeType = System.getenv("OTA_KEYSTORE_TYPE")?.takeIf { it.isNotBlank() } ?: "PKCS12"
-            storePassword = customPass ?: "cardtycoon_ota_universal"
-            keyAlias = customAlias ?: "cardtycoon"
-            keyPassword = customKeyPass ?: customPass ?: "cardtycoon_ota_universal"
+            storeFile = if (!envPath.isNullOrBlank()) file(envPath) else file("signing/universal-ota.p12")
+            storeType = if (!envType.isNullOrBlank()) envType else "PKCS12"
+            storePassword = if (!envPass.isNullOrBlank()) envPass else "cardtycoon_ota_universal"
+            keyAlias = if (!envAlias.isNullOrBlank()) envAlias else "cardtycoon"
+            keyPassword = when {
+                !envKeyPass.isNullOrBlank() -> envKeyPass
+                !envPass.isNullOrBlank() -> envPass
+                else -> "cardtycoon_ota_universal"
+            }
         }
     }
 

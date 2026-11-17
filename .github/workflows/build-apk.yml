@@ -54,7 +54,13 @@ jobs:
           fi
 
       - name: Run Unit Tests
-        run: gradle testDebugUnitTest -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace
+        run: |
+          set -o pipefail
+          if ! gradle testDebugUnitTest -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace 2>&1 | tee /tmp/test.log; then
+            ERR=$(grep -E "FAILURE:|What went wrong:|> |e: file:" /tmp/test.log | tail -n 12 | tr '\n' ' ')
+            echo "::error::Gradle testDebugUnitTest failed: ${ERR}"
+            exit 1
+          fi
 
       - name: Build Signed Release APK
         env:
@@ -63,7 +69,13 @@ jobs:
           OTA_KEYSTORE_PASS: ${{ secrets.OTA_KEYSTORE_PASS }}
           OTA_KEY_ALIAS: ${{ secrets.OTA_KEY_ALIAS }}
           OTA_KEY_PASS: ${{ secrets.OTA_KEY_PASS }}
-        run: gradle assembleRelease -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace
+        run: |
+          set -o pipefail
+          if ! gradle assembleRelease -PappVersionCode=${{ steps.ver.outputs.code }} -PappVersionName=${{ steps.ver.outputs.name }} --stacktrace 2>&1 | tee /tmp/release.log; then
+            ERR=$(grep -E "FAILURE:|What went wrong:|> |e: file:" /tmp/release.log | tail -n 12 | tr '\n' ' ')
+            echo "::error::Gradle assembleRelease failed: ${ERR}"
+            exit 1
+          fi
 
       - name: Verify APK Signing Certificate Fingerprint
         run: |
